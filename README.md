@@ -130,6 +130,7 @@ agent-less in both cases.
 | Print a DSH URL | `just dsh-url dsh-proj` |
 | DSH logs (startup URL/token) | `just dsh-logs dsh-proj` |
 | Shell into a running DSH sandbox | `just attach dsh-proj` |
+| Keepalive ping for the OpenCode Go plan | `just activate` |
 | New project | `just new <name> [image]` |
 | Refresh agent CLIs | `just bump-agents && just build` |
 | Update gateway keys | `just seed-secrets` |
@@ -173,18 +174,19 @@ look similar — is documented in the command reference:
 ## Repo map
 
 ```
-vm/ai-box.yaml          the Lima VM manifest (VM pins: sysbox, caddy, registry)
-images/Dockerfile       layered flavors: base→node-core→toolchains→{whiteboard,opencode,deepseek}
-images/docker-bake.hcl  every image pin, one file
-images/rootfs/          baked OpenCode config, DSH web profile, dsh-web launcher
+vm/ai-box.yaml           the Lima VM manifest (VM pins: sysbox, caddy, registry)
+images/Dockerfile        layered flavors: base→node-core→toolchains→{whiteboard,opencode,deepseek}
+images/docker-bake.hcl   every image pin, one file
+images/rootfs/           baked OpenCode config, DSH web profile, dsh-web launcher
 sandbox/compose.sandbox.yaml per-project sandbox template
 sandbox/compose.dsh.yaml     DSH port + dsh-home override (`just dsh-up`)
 sandbox/*.env.example        templates: .sandbox.env (knobs), .ai.env (container env)
-gateway/Caddyfile       protocol-blind credential gateway (OpenCode Go + DeepSeek)
-scripts/bump.sh         refresh version pins from upstream
-scripts/verify.sh       smoke tests (run inside the VM)
-scripts/seed-secrets.sh install gateway keys from the Mac
-docs/                   ARCHITECTURE / BOOTSTRAP / COMMANDS / UPDATES / SECURITY / RUNBOOK / AGENT-CONFIG / FAQ / ARCHIVE / OPENAI-PLUS
+gateway/Caddyfile        protocol-blind credential gateway (OpenCode Go + DeepSeek)
+scripts/bump.sh          refresh version pins from upstream
+scripts/verify.sh        smoke tests (run inside the VM)
+scripts/seed-secrets.sh  install gateway keys from the Mac
+scripts/go-keepalive.sh  the OpenCode Go keepalive curl (run by `just activate`)
+docs/                    ARCHITECTURE / BOOTSTRAP / COMMANDS / UPDATES / SECURITY / RUNBOOK / AGENT-CONFIG / FAQ / ARCHIVE / OPENAI-PLUS
 ```
 
 Docs: [ARCHITECTURE](docs/ARCHITECTURE.md) · [BOOTSTRAP](docs/BOOTSTRAP.md)

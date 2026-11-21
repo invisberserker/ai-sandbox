@@ -57,6 +57,7 @@ missing.
 | `just attach <name> [vm]` | Your everyday entry once the project is `up`: bash inside the running sandbox. Exit the exec without stopping anything. |
 | `just clean <name> [vm]` | `compose down`: containers + network gone, volumes kept. |
 | `just purge <name> [vm]` | Prompts y/N, then also wipes the project's VOLUMES (inner images, caches, agent state). Source on the Mac untouched. |
+| `just activate [vm]` | The unattended OpenCode Go keepalive — the idle-morning ritual as one command. Scaffolds the recipe-owned burner project `go-keepalive`, runs `scripts/go-keepalive.sh` in a one-off sandbox (`shell` semantics, TTY-less, cron/launchd-safe): one gateway-routed curl asking for a dad joke — a 200 reply opens/refreshes the plan's **5-hour rolling window**; anything else fails loudly with the [RUNBOOK](RUNBOOK.md) decode. Then: `purge` minus the y/N (`down -v` — the project is seconds old) and `rm -rf ~/ai-projects/go-keepalive`. No prompts, no residue; a run killed midway is healed by the next. Never use `go-keepalive` as a real project name. |
 
 ### DSH (DeepSeek Harness web sandboxes)
 
@@ -134,6 +135,13 @@ no trailing argument, no export.
   (`~/.local/share/opencode`, on the `home-local` volume), so a past
   conversation can be resumed from the TUI even after `clean`. What
   only `up` preserves is the live process tree.
+- **`activate` vs a manual `shell`** — `activate` IS a `shell` run,
+  scripted: same fresh-container `compose run --rm`, but the session is
+  the repo's one-liner curl (`scripts/go-keepalive.sh`) instead of a
+  keyboard, the project is the recipe-owned `go-keepalive` burner, and
+  the exit sweeps it (`down -v` + `rm -rf`). It exists because the
+  OpenCode Go plan's 5-hour rolling window opens on ANY request: one
+  cheap dad-joke ping on an idle morning — no typing, no residue.
 - **`clean` vs `purge` vs `vm-rebuild`/`nuke`** — the ephemerality
   ladder ([ARCHITECTURE.md](ARCHITECTURE.md) → "Ephemerality ladder"):
   `clean` drops the container OS, `purge` also drops that project's

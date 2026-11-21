@@ -9,6 +9,7 @@
 #   just new proj-alpha ai-opencode && just shell proj-alpha
 #   just new dsh-proj ai-deepseek && just dsh-up dsh-proj
 # Weekly:   just bump-agents && just build && just verify
+# Idle AM:  just activate            (OpenCode Go keepalive: dad-joke ping)
 # Reset:    just vm-rebuild   (VM)  /  just purge proj-alpha  (one project)
 #
 # VM names: commands take the VM name as a trailing argument
@@ -233,6 +234,42 @@ purge name vm=vm_name:
     read -r -p "wipe volumes for '{{name}}' (inner images, caches, agent state)? [y/N] " a
     [ "$a" = "y" ] || exit 0
     just -f {{justfile()}} compose {{vm}} {{name}} down -v
+
+# activate [VM] — the whole idle-morning ritual as one command: `new` a
+# burner sandbox, run the dad-joke curl inside it (scripts/go-keepalive.sh
+# — opens/refreshes the plan's 5-hour rolling window), exit, purge the
+# volumes, rm -rf the burner dir. No typing, no prompts, no residue; the
+# scripted session is TTY-less (-T), so cron/launchd works too. The fixed
+# burner name `go-keepalive` is owned by this recipe — a run killed
+# midway is healed by the next one; never put real work there.
+# activate [VM] — keepalive ping for the OpenCode Go 5h rolling window.
+[group('projects')]
+activate vm=vm_name:
+    #!/bin/bash
+    set -euo pipefail
+    name="go-keepalive"
+    d="$HOME/ai-projects/$name"   # the burner dir — ../go-keepalive when
+                                  # the repo sits at ~/ai-projects/ai-sandbox
+    # 1. just new — scaffold the burner (idempotent: writes .sandbox.env
+    #    only once; an existing checkout is left alone).
+    just -f {{justfile()}} new "$name"
+    # 2. just shell, minus the keyboard: the one-liner rides the project
+    #    mount (the file cp'd below is /workspace/go-keepalive.sh inside
+    #    the sandbox); `run --rm` = the shell recipe's fresh-container,
+    #    removed-at-exit semantics; -T = nothing needs a TTY. A failed
+    #    ping must still reach the cleanup below, so capture, don't abort.
+    cp "{{repo_dir}}/scripts/go-keepalive.sh" "$d/go-keepalive.sh"
+    rc=0
+    just -f {{justfile()}} compose "{{vm}}" "$name" run --rm -T agent bash /workspace/go-keepalive.sh || rc=$?
+    # 3. exit the shell (implicit: the script ends, --rm reaps the
+    #    container), then the purge half: `down -v` = just purge minus the
+    #    y/N prompt (this project is seconds old), and rm -rf the burner
+    #    dir. Unconditional — a failed or killed run leaves nothing
+    #    behind, and the fixed name self-heals any residue it finds.
+    just -f {{justfile()}} compose "{{vm}}" "$name" down -v || true
+    rm -rf "$d"
+    [ "$rc" -eq 0 ] || { echo "activation failed (hints above); burner '$name' swept anyway" >&2; exit "$rc"; }
+    echo "opencode go window activated on '{{vm}}' — burner '$name' swept."
 
 # ─── DSH (DeepSeek Harness web UI) ───────────────────────────────────────────
 # The dsh flavor runs its web UI inside a sysbox sandbox. The override adds
