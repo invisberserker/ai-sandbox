@@ -177,6 +177,17 @@ virtiofs files present as 65534:65534 inside the user namespace.
 5. A CLI that ignores base URLs (rare, usually proprietary builds): use
    the mitmproxy ladder (SECURITY.md), direct BYOK, or pin a version that
    honors a custom endpoint. Do not add per-model logic to Caddy.
+6. The provider's OWN auth error quoting the dummy — DeepSeek's
+   `Authentication Fails, Your api key: ****ummy is invalid` — means the
+   request reached `api.deepseek.com` DIRECTLY, not through the gateway
+   (the gateway swaps the dummy in transit; a routed request can never
+   leak the dummy into an upstream error). In the opencode flavor, the
+   sandbox's `opencode.json` has lost (or pre-dates) the catalog
+   `deepseek` endpoint-override: check
+   `/root/.config/opencode/opencode.json` — volumes seeded before the
+   override was baked keep the old copy, so hand-edit it or
+   `just purge <project>`. Do NOT "fix" it with `/connect` and the real
+   key — that is direct BYOK, the real key lands inside the sandbox.
 
 ## The echo-logging test (what OpenCode really sends per API family)
 

@@ -83,11 +83,18 @@ http://host.docker.internal:4000, http://{$DOCKER_GATEWAY}:4000, http://127.0.0.
 		}
 	}
 
-	# --- DeepSeek official (primary for the dsh flavor) ---------------------------
-	# DeepSeek Harness (dsh) web profile uses:
-	#   http://host.docker.internal:4000/deepseek/v1
-	# DSH appends /chat/completions; handle_path strips /deepseek and the
-	# upstream receives /v1/chat/completions.
+	# --- DeepSeek official (dsh flavor + the opencode flavor's deepseek override) --
+	# ONE route per UPSTREAM, not per harness: every baked DeepSeek
+	# consumer rides here — a separate /opencode-deepseek twin would be a
+	# same-upstream duplicate, not extra isolation. Consumers:
+	#   dsh web profile   images/rootfs/root/.dsh/profiles/web/cordis.patch.yml
+	#   opencode flavor   images/rootfs/root/.config/opencode/opencode.json
+	#                     (endpoint-override of the catalog `deepseek`
+	#                      provider; its DEEPSEEK_API_KEY dummy is the one
+	#                      compose sets in every flavor)
+	# Both use http://host.docker.internal:4000/deepseek/v1 and append the
+	# native path; handle_path strips /deepseek and the upstream receives
+	# /v1/chat/completions.
 	handle_path /deepseek/* {
 		reverse_proxy https://api.deepseek.com {
 			header_up Host api.deepseek.com

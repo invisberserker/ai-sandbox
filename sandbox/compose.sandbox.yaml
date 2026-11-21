@@ -69,6 +69,8 @@ services:
       #
       # PRIMARY ROUTES:
       #   opencode flavor → OpenCode Go via /opencode-go
+      #                     + DeepSeek official via /deepseek (the baked
+      #                       opencode.json overrides the catalog provider)
       #   dsh flavor      → DeepSeek official via /deepseek
       # Ad-hoc OpenAI-compatible tools use the two OPENAI_* vars below; a
       # project can retarget them to another gateway route via its .ai.env
@@ -78,8 +80,11 @@ services:
       # standard env vars — the baked v2 config holds no key material).
       - OPENCODE_API_KEY=oc_sk_sandbox_dummy
       - OPENCODE_GO_API_KEY=oc_sk_sandbox_dummy
-      # DeepSeek official key (dsh web profile uses this via apiKeyEnv;
-      # ad-hoc OpenAI-compatible tools can use the OPENAI_* aliases below).
+      # DeepSeek official key. Two baked consumers, both gateway-routed:
+      # the dsh web profile (via apiKeyEnv) and the opencode flavor's
+      # catalog `deepseek` provider (its endpoint override points it at
+      # /deepseek). Ad-hoc OpenAI-compatible tools can use the OPENAI_*
+      # aliases below.
       - DEEPSEEK_API_KEY=sk-deepseek-sandbox-dummy
       - OPENAI_API_KEY=sk-deepseek-sandbox-dummy
       - OPENAI_BASE_URL=http://host.docker.internal:4000/deepseek/v1

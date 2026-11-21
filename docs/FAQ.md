@@ -89,6 +89,17 @@ covers all models and protocols. Adding a model to the Go plan requires
 zero gateway changes. Putting OpenAI/Anthropic/Gemini translation into
 Caddy would duplicate OpenCode Console in the wrong layer.
 
+## Why does the OpenCode flavor ride the same /deepseek route as dsh — no separate /opencode-deepseek?
+
+Gateway routes are per-**upstream**, not per harness or per API family.
+Both baked DeepSeek consumers — the dsh web profile and the OpenCode
+flavor's endpoint-override of the catalog `deepseek` provider — send
+OpenAI-shaped requests to `api.deepseek.com`. One route strips
+`/deepseek`, forwards `/v1/...`, and swaps in the one real key for
+whichever harness is talking. A second route would only duplicate the
+upstream, the secret, and the surface to audit. Same principle as one
+route covering every OpenCode Go model above.
+
 ## How would I use an OpenAI Plus subscription?
 
 Two designs are recorded in [OPENAI-PLUS.md](OPENAI-PLUS.md): a scoped

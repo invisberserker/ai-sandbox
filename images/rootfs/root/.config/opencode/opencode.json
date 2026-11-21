@@ -5,7 +5,12 @@
       "settings": {
         "baseURL": "http://host.docker.internal:4000/opencode-go/inference/go/v1"
       }
+    },
+    "deepseek": {
+      "settings": {
+        "baseURL": "http://host.docker.internal:4000/deepseek/v1"
+      }
     }
   },
-  "model": "opencode-go/kimi-k3"
+  "model": "deepseek/deepseek-flash"
 }

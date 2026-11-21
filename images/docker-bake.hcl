@@ -13,7 +13,8 @@
 #
 # Three flavors, identical toolchains; two carry one agent CLI each, one
 # carries none (see Dockerfile):
-#   ai-opencode     OpenCode TUI + baked opencode.json (OpenCode Go)
+#   ai-opencode     OpenCode TUI + baked opencode.json (OpenCode Go +
+#                    DeepSeek endpoint-overrides)
 #   ai-deepseek     DeepSeek Harness web UI + baked web profile
 #   ai-whiteboard   NO agent CLI — a clean slate: full toolchains + utils,
 #                   for working with any agent ad-hoc (npx …, uv tool

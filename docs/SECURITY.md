@@ -40,7 +40,7 @@ OpenCode TUI / DSH web (sandbox)              VM root namespace
 
 | Flavor | What the sandbox holds | Gateway route | Upstream |
 | --- | --- | --- | --- |
-| opencode | `OPENCODE_API_KEY=oc_sk_sandbox_dummy`; baked `opencode.json` base URL `/opencode-go/inference/go/v1` | `/opencode-go` | OpenCode Console (`https://opencode.ai/inference/go/v1`) |
+| opencode | `OPENCODE_API_KEY=oc_sk_sandbox_dummy`, `DEEPSEEK_API_KEY=sk-deepseek-sandbox-dummy`; baked `opencode.json` endpoint-overrides the catalog `opencode-go` provider to `/opencode-go/inference/go/v1` and the catalog `deepseek` provider to `/deepseek/v1` | `/opencode-go`, `/deepseek` | OpenCode Console (`https://opencode.ai/inference/go/v1`); DeepSeek official (`https://api.deepseek.com`) |
 | deepseek | `DEEPSEEK_API_KEY=sk-deepseek-sandbox-dummy`; baked DSH profile base URL `/deepseek/v1` | `/deepseek` | `https://api.deepseek.com` |
 | whiteboard / ad-hoc | `OPENAI_API_KEY=sk-deepseek-sandbox-dummy` | `/deepseek` | DeepSeek official |
 

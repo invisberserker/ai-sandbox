@@ -276,11 +276,17 @@ ARG OPENCODE_VERSION=unknown
 RUN npm install -g --no-fund --no-audit "@opencode/cli@${OPENCODE_VERSION}" \
  && npm cache clean --force \
  && opencode --version
-# Provider config (OpenCode Go through the gateway), in the v2 config
-# schema ("endpoint override" pattern from the OpenCode v2 providers
-# docs): the catalog `opencode-go` provider keeps its package/models and
-# only its settings.baseURL is pointed at the gateway; the dummy key
-# arrives through the provider's standard env vars, which compose sets.
+# Provider config (OpenCode Go + DeepSeek official through the gateway),
+# in the v2 config schema ("endpoint override" pattern from the OpenCode
+# v2 providers docs): the catalog `opencode-go` provider keeps its
+# package/models and only its settings.baseURL is pointed at the gateway;
+# the dummy key arrives through the provider's standard env vars, which
+# compose sets. The catalog `deepseek` provider gets the same override,
+# pointed at the SAME /deepseek route the dsh flavor uses — routes are
+# per-upstream, not per-harness, so no new Caddy block. Without it, /models'
+# "DeepSeek" entries would send the DEEPSEEK_API_KEY dummy straight to
+# api.deepseek.com (loud auth failure); with it, the gateway swaps in
+# REAL_DEEPSEEK_API_KEY in transit.
 # Lives under /root/.config/opencode/ — a named-volume path, so Docker
 # seeds a FRESH project volume with this file on first mount; user edits
 # persist on the volume afterwards. See docs/AGENT-CONFIG.md before

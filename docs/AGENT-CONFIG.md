@@ -22,7 +22,10 @@ real keys live in the sandbox.
 The path after the route prefix is forwarded unchanged. That is why one
 `/opencode-go` route covers every OpenCode Go model and every API family
 (OpenAI Chat, OpenAI Responses, Anthropic Messages, Gemini): the TUI owns
-the protocol choice; Console owns the translation.
+the protocol choice; Console owns the translation. For the same reason —
+one route per **upstream**, not per harness — a single `/deepseek` route
+serves both consumers: the dsh web profile and the OpenCode flavor's
+catalog `deepseek` override.
 
 A nested container started by the sandbox's inner Docker cannot rely on
 `host.docker.internal`: the name only resolves if the inner daemon adds it
@@ -34,11 +37,13 @@ fits).
 
 ## Flavor: opencode (`ai-opencode`)
 
-Default provider: **OpenCode Go**, via the gateway. The image installs
-OpenCode **v2** (`@opencode/cli` on npm) and the baked config uses the
-**v2 schema** — `providers`, plural, with `settings.baseURL`. The v1
-format (singular `provider` + `options.*`) is silently ignored by v2, so
-don't paste old configs:
+Default provider: **OpenCode Go**, via the gateway. **DeepSeek
+official** is wired through the same pattern (see
+[DeepSeek official via the gateway](#deepseek-official-via-the-gateway)
+below). The image installs OpenCode **v2** (`@opencode/cli` on npm) and
+the baked config uses the **v2 schema** — `providers`, plural, with
+`settings.baseURL`. The v1 format (singular `provider` + `options.*`) is
+silently ignored by v2, so don't paste old configs:
 
 ```json
 {
@@ -48,21 +53,26 @@ don't paste old configs:
       "settings": {
         "baseURL": "http://host.docker.internal:4000/opencode-go/inference/go/v1"
       }
+    },
+    "deepseek": {
+      "settings": {
+        "baseURL": "http://host.docker.internal:4000/deepseek/v1"
+      }
     }
   },
   "model": "opencode-go/kimi-k3"
 }
 ```
 
-That is the "endpoint override" pattern from the v2 providers docs: the
-catalog `opencode-go` provider keeps its package, models and connection;
-only its base URL is pointed at the gateway. The credential comes from
-the provider's standard environment variable — compose sets
-`OPENCODE_API_KEY` (and the `OPENCODE_GO_API_KEY` alias) to the same
-dummy, so the env connection is active with no key material in the
-config file.
+That is the "endpoint override" pattern from the v2 providers docs: each
+catalog provider keeps its package, models and connection; only its base
+URL is pointed at the gateway. The credential comes from the provider's
+standard environment variable — compose sets `OPENCODE_API_KEY` (and the
+`OPENCODE_GO_API_KEY` alias) plus `DEEPSEEK_API_KEY` to dummies, so the
+env connections are active with no key material in the config file.
 
-Use `/models` in the TUI to pick any Go model.
+Use `/models` in the TUI to pick any Go model — or any catalog DeepSeek
+model, which rides the `/deepseek` route (below).
 
 The config lives under `/root/.config/opencode/` on the `home-config`
 volume. Docker seeds a fresh project volume with the image copy on first
@@ -71,6 +81,36 @@ projects keep their old copy — edit it in the project or purge the
 volume. That migration note is doubly true across the v1→v2 schema
 change: a pre-v2 volume config (singular `provider`) is silently ignored
 by v2, so re-seed or hand-edit it.
+
+### DeepSeek official via the gateway
+
+The `deepseek` entry in the baked config above is the same endpoint
+override aimed at a second upstream: the catalog `deepseek` provider —
+the one `/models` lists as **DeepSeek** — points at the same `/deepseek`
+route the dsh flavor uses. Routes are per-upstream, not per-harness, so
+this needs **no new Caddy block, no new secret, no gateway reload**: the
+route and `REAL_DEEPSEEK_API_KEY` already exist for dsh.
+
+The catalog provider keeps its package, its model list (current ids
+`deepseek-flash`, `deepseek-v4-pro`, ...) and its `DEEPSEEK_API_KEY`
+connection — compose sets that variable to the dummy in every flavor.
+Picking a DeepSeek model in `/models` then works: the TUI sends
+`Bearer sk-deepseek-sandbox-dummy` to `/deepseek/v1/chat/completions`,
+and the gateway swaps in `REAL_DEEPSEEK_API_KEY` in transit.
+
+Without the override, the catalog provider sends the dummy straight to
+`https://api.deepseek.com` — the failure mode is DeepSeek's
+`Authentication Fails, Your api key: ****ummy is invalid`. The tempting
+in-TUI fix, `/connect` with your real DeepSeek key, is the anti-pattern:
+it stores the real key inside the sandbox (`/root/.local` auth store),
+where a prompt-injected agent can exfiltrate it. The endpoint override
+is the fix that keeps the key on the VM. (Direct BYOK remains the right
+escape hatch only for providers that cannot use a custom base URL.)
+
+Sandboxes created before this override was baked keep their old
+`opencode.json` on the `home-config` volume — hand-edit
+`/root/.config/opencode/opencode.json` inside them to add the
+`deepseek` block, or `just purge <project>` to re-seed from the image.
 
 ### Gateway-isolated third-party provider (template)
 
@@ -252,6 +292,14 @@ dummy `OPENCODE_API_KEY`.
   gateway default-denies anything not matching an active route.
 - **401 from the upstream** — the route works but the real key is missing
   or rejected. Check `just seed-secrets` and the Mac-side secrets file.
+- **The upstream's own auth error quotes the dummy** (DeepSeek:
+  `Authentication Fails, Your api key: ****ummy is invalid`) — the
+  request bypassed the gateway and hit the provider origin directly; a
+  routed request can never leak the dummy upstream. In the opencode
+  flavor the sandbox's `opencode.json` has lost (or pre-dates) the
+  catalog `deepseek` endpoint-override — hand-edit it in the sandbox or
+  purge the project. Do not "fix" it with `/connect` and the real key
+  (direct BYOK: the real key lands inside the sandbox).
 - **404/502** — path/base-URL drift or upstream unreachable. Check the
   sandbox base URL against the route table: the native path after the route
   prefix must be exactly what the harness normally sends.

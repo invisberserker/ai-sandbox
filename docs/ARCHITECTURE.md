@@ -107,7 +107,7 @@ base          ubuntu digest-pinned, system tools, inner docker-ce, sysbox tweaks
   └ node-core     fnm + pinned Node LTS + tsc
       └ toolchains   rust (rustup+binstall) + python (uv+managed CPython) + go
           │          ↑ also shipped directly as ai-whiteboard (zero agents)
-          ├ opencode   OpenCode TUI + baked opencode.json (OpenCode Go)   ← thin
+          ├ opencode   OpenCode TUI + baked opencode.json (Go + DeepSeek) ← thin
           └ deepseek   DeepSeek Harness web UI + baked web profile       ← volatile
 ```
 
@@ -152,8 +152,10 @@ Two active routes, one per upstream:
   `/v1/models/<id>:…`) converges on
   one origin and one Caddy block. Adding a Go model requires no gateway
   change.
-- `/deepseek/*` → `https://api.deepseek.com`. The DeepSeek Harness web
-  flavor uses an OpenAI-compatible custom provider pointing at
+- `/deepseek/*` → `https://api.deepseek.com`. One route per upstream, not
+  per harness: the DeepSeek Harness web flavor's OpenAI-compatible
+  custom provider rides it, and so does the OpenCode flavor's baked
+  endpoint-override of the catalog `deepseek` provider — both point at
   `/deepseek/v1`.
 
 The gateway listens on the VM's docker0 bridge

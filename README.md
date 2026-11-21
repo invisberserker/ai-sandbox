@@ -57,9 +57,15 @@ docker) — two carry an agent CLI, one carries none:
 
 | Flavor | Agent | Default provider (via gateway) |
 | --- | --- | --- |
-| `ai-opencode` | OpenCode TUI | OpenCode Go subscription |
+| `ai-opencode` | OpenCode TUI | OpenCode Go subscription (+ DeepSeek official override) |
 | `ai-deepseek` | DeepSeek Harness (dsh) web UI | DeepSeek official API |
 | `ai-whiteboard` | — none — | any, ad-hoc (npx/uv/curl whatever the task needs) |
+
+DeepSeek official is wired into the OpenCode flavor the same way: the
+baked config endpoint-overrides the catalog `deepseek` provider onto the
+same `/deepseek` route the dsh flavor uses — pick a DeepSeek model in
+`/models` and the gateway swaps the dummy for your real key in transit
+(no second route, no key in the sandbox).
 
 The OpenCode flavor is also the base harness for third-party providers:
 use OpenCode's native provider catalog with direct BYOK, or add a
