@@ -321,18 +321,22 @@ verify`.
    ```bash
    B=http://host.docker.internal:4000/opencode-go/inference/go/v1
    K='Authorization: Bearer oc_sk_sandbox_dummy'
-   curl -s -o /dev/null -w 'responses  %{http_code}\n' -H "$K" -H 'content-type: application/json' \
+   # OpenCode Go 400s with MissingSessionID unless x-opencode-session
+   # (its prompt-cache routing key, passed through by the gateway) is set:
+   S="x-opencode-session: $(cat /proc/sys/kernel/random/uuid)"
+   curl -s -o /dev/null -w 'responses  %{http_code}\n' -H "$K" -H "$S" -H 'content-type: application/json' \
         -d '{"model":"gpt-6-luna","input":"hi"}' $B/responses
-   curl -s -o /dev/null -w 'chat       %{http_code}\n' -H "$K" -H 'content-type: application/json' \
+   curl -s -o /dev/null -w 'chat       %{http_code}\n' -H "$K" -H "$S" -H 'content-type: application/json' \
         -d '{"model":"glm-5.3-flash","messages":[{"role":"user","content":"hi"}],"max_tokens":16}' $B/chat/completions
-   curl -s -o /dev/null -w 'anthropic  %{http_code}\n' -H "$K" -H 'content-type: application/json' \
+   curl -s -o /dev/null -w 'anthropic  %{http_code}\n' -H "$K" -H "$S" -H 'content-type: application/json' \
         -d '{"model":"claude-haiku-5-5","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}' $B/messages
-   curl -s -o /dev/null -w 'gemini     %{http_code}\n' -H "$K" -H 'content-type: application/json' \
+   curl -s -o /dev/null -w 'gemini     %{http_code}\n' -H "$K" -H "$S" -H 'content-type: application/json' \
         -d '{"contents":[{"parts":[{"text":"hi"}]}]}' "$B/models/gemini-4-argon:generateContent"
    ```
 
    Four `200`s = every family works through the gateway with Bearer-only
-   rewriting. Drop `-o /dev/null` to read the actual (error) bodies.
+   rewriting. A `400 MissingSessionID` means the `S` header was dropped.
+   Drop `-o /dev/null` to read the actual (error) bodies.
 
 6. **Cleanup.** Remove the TEMP `log` + `handle /echo/*` blocks from
    `gateway/Caddyfile` and `just gateway-reload` — leaving them on is
