@@ -79,6 +79,69 @@ inside the sandbox check `docker run --rm busybox nslookup google.com`;
 override with `SANDBOX_DNS=<ip>` in the project's `.ai.env` — entrypoint
 knobs are container env, and nothing interpolates `SANDBOX_*` into
 `environment:`, so `.sandbox.env` cannot deliver them.
+The host-proxy variant of DNS pain — `ping` going silent for seconds
+behind a fakeip TUN — is the next section.
+
+## Reverse DNS stalls behind the host's fakeip TUN (ping "silent for seconds")
+
+**Symptom.** With a fake-ip proxy TUN on the Mac (sing-box, 198.18.0.0/15),
+`ping <domain>` in the VM or a sandbox prints its header, then sits silent
+for ~4–8 s before the first reply line bursts out — with sub-ms RTTs.
+`curl` works everywhere; `ping -n`, pinging by IP, and busybox ping are
+instant; macOS `ping` never stalls. Misdirection bonus: `ping 203.0.113.1`
+"works" too — the TUN fabricates ICMP replies, so behind fake-ip ping
+success proves nothing about reachability. Only TCP/UDP tests are real.
+
+**Cause.** Linux iputils-ping blocks printing its first reply line on a
+synchronous reverse (PTR) lookup of the reply address — busybox ping and
+macOS BSD ping never do that lookup. A fakeip has no useful PTR, so the
+behavior is decided by which path the lookup takes:
+
+| where | PTR path | latency |
+| --- | --- | --- |
+| leaf containers | entrypoint `--dns` → raw UDP → host TUN hijack | sing-box answers in ~2 ms |
+| VM + sandbox, before steps 3/7 | lima NAT DNS proxy → macOS resolver | ~4 s → SERVFAIL, regardless of sing-box's answer |
+| macOS host | — | BSD ping does no reverse lookup |
+
+On the sing-box side the PTR rule must answer `NXDOMAIN`, not `REFUSED`:
+musl (alpine) ignores REFUSED and waits out its retry budget (~4 s), while
+NXDOMAIN is a terminal negative answer for glibc and musl alike:
+
+```json
+{ "query_type": ["PTR", "HTTPS"], "action": "predefined", "rcode": "NXDOMAIN" }
+```
+
+**Stack side (vm/ai-box.yaml, provisioned).** Step 3 pins the outer
+daemon's embedded resolver (`"dns": ["1.1.1.1"]`) — the upstream a sandbox's
+`127.0.0.11` forwards to. Step 7 pins the VM's own `/etc/resolv.conf` to a
+public IP, replacing the systemd-resolved symlink — pinning resolved.conf
+globals instead would be silently ignored, because the DHCP link's per-link
+DNS wins default-route lookups. Neither touches images or volumes — no
+rebuild needed — and both re-apply on every VM boot. To apply live now,
+from a VM shell (`just vm-shell`):
+
+```bash
+# step 3 live — restarting docker restarts every running sandbox:
+sudo jq '. + {dns: ["1.1.1.1"]}' /etc/docker/daemon.json \
+  | sudo tee /etc/docker/daemon.json.new
+sudo mv /etc/docker/daemon.json.new /etc/docker/daemon.json
+sudo systemctl restart docker
+
+# step 7 live — rm first, or tee would write through the symlink into
+# /run/systemd/resolve/stub-resolv.conf; systemd-resolved keeps running:
+sudo rm -f /etc/resolv.conf
+printf 'nameserver 1.1.1.1\n' | sudo tee /etc/resolv.conf
+```
+
+**Verify.** In a sandbox, `dig -x "$(dig +short google.com)"` must answer
+NXDOMAIN in single-digit ms (before: SERVFAIL after ~4 s), and
+`time ping -c 2 google.com` must take ~2 s (before: ~8 s). Plain
+`ping google.com` in the VM prints continuously. On the Mac,
+`time dscacheutil -q host -a ip_address 198.18.0.25` shows the ~4 s stall
+in the macOS resolver itself — the thing the VM no longer rides.
+
+No fakeip TUN on the Mac? PTRs resolve normally end-to-end, nothing
+stalls, and both pins are inert (1.1.1.1 is then just plain DNS).
 
 ## git: "detected dubious ownership"
 

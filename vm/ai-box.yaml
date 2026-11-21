@@ -155,12 +155,22 @@ provision:
         "registry-mirrors": ["http://127.0.0.1:5000"],
         "insecure-registries": ["127.0.0.1:5000"],
         "log-driver": "local",
-        "log-opts": { "max-size": "20m", "max-file": "3" }
+        "log-opts": { "max-size": "20m", "max-file": "3" },
+        "dns": ["1.1.1.1"]
       }
       EOF
       # registry-mirrors points at the step-5 cache; insecure-registries is
       # stated for the plain-HTTP mirror. A down mirror just means slower
       # pulls (fall through to Docker Hub), never a failure.
+      # dns: the upstream for this daemon's embedded resolver — the one every
+      # sandbox's resolv.conf ultimately rides (127.0.0.11 → here). The VM's
+      # lima-assigned resolver (macOS's, via the NAT DNS proxy) answers
+      # A/AAAA fine but stalls ~4 s on reverse (PTR) queries, which
+      # iputils-ping blocks its first output line on (RUNBOOK → "Reverse DNS
+      # stalls behind a fakeip TUN"). A public IP rides the default route:
+      # intercepted + answered in ~2 ms by the host's fakeip TUN when up,
+      # plain DNS otherwise. Same reasoning as the INNER daemons' --dns in
+      # images/docker-entrypoint.sh.
       # The VM user's docker-group membership is applied by `just vm-up`
       # after the boot — an authenticated session is simpler and more
       # reliable than doing it inside provisioning.
@@ -305,6 +315,41 @@ provision:
       systemctl daemon-reload
       systemctl enable --now ai-gateway
       systemctl restart ai-gateway
+
+  # --- 7. VM resolver: bypass the NAT DNS proxy --------------------------------
+  # lima hands the guest macOS's resolver via DHCP. That proxy path answers
+  # A/AAAA fine (a fakeip TUN on the Mac intercepts them), but reverse (PTR)
+  # lookups stall ~4 s before SERVFAIL, regardless of what the host TUN would
+  # answer — and VM tools that reverse-resolve inherit the wait (iputils-ping
+  # blocks its first reply line on it). Pin /etc/resolv.conf to a public IP:
+  # raw UDP rides the default route and gets answered by the host TUN in ~2
+  # ms when one is up, or is just plain DNS when not. Same path leaf
+  # containers already take via the entrypoint --dns; step 3's "dns" key
+  # moves the outer daemon's embedded resolver onto it as well.
+  # Replaced as a FILE on purpose: the distro /etc/resolv.conf is a symlink
+  # into systemd-resolved, and pinning resolved.conf globals is silently
+  # ignored (the DHCP link's per-link DNS wins default-route lookups).
+  # systemd-resolved keeps running; its stub stays up for explicit callers.
+  # Idempotent — re-applied on every VM boot / `limactl start` re-provision.
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -euxo pipefail
+      rm -f /etc/resolv.conf        # symlink (or file) — replaced, not appended
+      cat > /etc/resolv.conf <<'EOF'
+      # Managed by vm/ai-box.yaml step 7 — pin VM DNS to a public resolver.
+      # WHY: the lima NAT's DNS proxy stalls seconds on reverse (PTR) lookups
+      # (docs/RUNBOOK.md → "Reverse DNS stalls behind a fakeip TUN"). A public
+      # IP rides the default route: hijacked by the host's fakeip TUN when up,
+      # plain DNS otherwise. Edit freely — provisioning rewrites on each boot.
+      nameserver 1.1.1.1
+      EOF
+      chmod 644 /etc/resolv.conf
+      # Loud warning, never a hard gate: a Mac briefly offline must not fail
+      # the whole boot over a DNS reachability check.
+      if ! timeout 10 getent hosts docker.com >/dev/null 2>&1; then
+        echo >&2 "WARN: public DNS 1.1.1.1 did not answer in 10s — check /etc/resolv.conf"
+      fi
 
 # --- Readiness probes -----------------------------------------------------------
 # `limactl start` blocks until these pass — a failed boot fails loudly.
