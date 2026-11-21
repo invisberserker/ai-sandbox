@@ -1,0 +1,68 @@
+# =============================================================================
+# DeepSeek Harness (dsh) web profile — sandbox gateway wiring
+# =============================================================================
+# Why "cordis": DSH is built on Cordis, its vendored plugin framework. A DSH
+# profile is a stack of Cordis patch layers: `cordis.yml` is the root include,
+# and `cordis.patch.yml` is the profile's user patch layer (plugin entries and
+# config overrides). The filename is fixed by DSH's dsh-app-boot package
+# (PROFILE_PATCH_FILENAME), not chosen by us. `profiles/web` is the profile
+# named "web"; the launcher creates the rest of the profile on first boot.
+#
+# Baked into the image at /root/.dsh/profiles/web/cordis.patch.yml. The
+# compose DSH override mounts a named volume at /root/.dsh, so Docker seeds a
+# FRESH project volume with this file on first mount; later edits persist on
+# the volume. If you change this file in the repo, existing projects keep
+# their old copy — delete the project's dsh-home volume to re-seed.
+#
+# The provider speaks OpenAI Chat Completions to the credential gateway:
+#   sandbox -> http://host.docker.internal:4000/deepseek/v1
+#   gateway -> https://api.deepseek.com/v1/chat/completions
+# DEEPSEEK_API_KEY is a format-valid dummy in compose; the gateway swaps in
+# REAL_DEEPSEEK_API_KEY in transit. No real key enters the sandbox.
+#
+# Model ids move: deepseek-chat / deepseek-reasoner were RETIRED upstream
+# on 2026-07-24; the current official API ids are deepseek-flash and
+# deepseek-v4-pro. Use Settings -> Models -> Fetch available models to
+# refresh, or add the current ids under DeepSeek's API docs. The list below
+# is a starting point for the first boot.
+# =============================================================================
+
+- id: llm-pi-ai
+  config:
+    providers:
+      deepseek-gateway:
+        displayName: DeepSeek (sandbox gateway)
+        api: openai-completions
+        baseURL: http://host.docker.internal:4000/deepseek/v1
+        apiKeyEnv: DEEPSEEK_API_KEY
+        compat:
+          # DeepSeek's OpenAI-compatible API rejects the OpenAI-only
+          # developer role and max_completion_tokens field.
+          supportsDeveloperRole: false
+          maxTokensField: max_tokens
+          # DeepSeek's reasoning switch travels as thinking: {type: ...}.
+          thinkingFormat: deepseek
+        models:
+          - id: deepseek-flash
+            name: DeepSeek Flash
+          - id: deepseek-v4-pro
+            name: DeepSeek V4 Pro
+
+- id: agent-default-model
+  config:
+    provider: deepseek-gateway
+    model: deepseek-flash
+
+# Hide the BUILT-IN DeepSeek provider (the one talking to api.deepseek.com
+# directly). With the compose dummy key it probes the official models
+# listing (401 noise on every refresh) and shows in model selectors next
+# to the gateway provider. Pointing its apiKeyEnv at an env the sandbox
+# never sets leaves it credential-less — documented dsh behavior then
+# hides it from model selectors and skips the listing request entirely
+# (its Settings entry remains). Direct BYOK inside a sandbox stays
+# possible by setting DEEPSEEK_DIRECT_API_KEY in a project's .ai.env —
+# deliberately not the default (SECURITY.md posture: real keys stay out
+# of sandboxes).
+- id: llm-deepseek
+  config:
+    apiKeyEnv: DEEPSEEK_DIRECT_API_KEY

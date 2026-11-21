@@ -1,0 +1,57 @@
+// =============================================================================
+// OpenCode gateway-isolated third-party provider — template only (v2 schema)
+// =============================================================================
+// Use this when you want a third-party provider's real key to stay on the
+// VM instead of in the sandbox. OpenCode v2 config shape: the top-level key
+// is `providers` (plural), the adapter is chosen with `package`, the
+// endpoint lives in `settings`, and credentials are declared via `env` —
+// a v1-format block (singular `provider` + `options.*`) is silently
+// ignored by v2.
+//
+// 1. Add the real key on the Mac:
+//      ~/.ai-secrets/ai-gateway.env
+//      REAL_FOO_API_KEY=...
+//
+// 2. Uncomment the /foo block in gateway/Caddyfile and set:
+//      handle_path /foo/* {
+//          reverse_proxy https://api.foo.com {
+//              header_up Host api.foo.com
+//              header_up Authorization "Bearer {env.REAL_FOO_API_KEY}"
+//          }
+//      }
+//    Apply: just seed-secrets && just gateway-reload
+//    (copies the Caddyfile to the VM, validates it, restarts the gateway)
+//
+// 3. Copy the provider block below into your OpenCode config
+//    (~/.config/opencode/opencode.json or a project opencode.json).
+//    The base URL is:
+//      provider origin           https://api.foo.com/v1
+//      gateway origin            http://host.docker.internal:4000/foo/v1
+//    Keep the native path after the route; the gateway forwards it
+//    unchanged.
+//
+// 4. Put the dummy key in the FOO_API_KEY env var (that project's .ai.env,
+//    or compose) — v2 reads credentials from env, not from the config file.
+//
+// 5. The gateway is protocol-blind. For an Anthropic-style provider, use
+//    the matching @opencode/ai provider package and add x-api-key to the
+//    Caddy template if the provider expects that header instead of Bearer.
+// =============================================================================
+{
+  "$schema": "https://opencode.ai/config.json",
+  "providers": {
+    "foo": {
+      "name": "Foo (via gateway)",
+      "env": ["FOO_API_KEY"],
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "http://host.docker.internal:4000/foo/v1"
+      },
+      "models": {
+        "foo-model": {
+          "name": "Foo Model"
+        }
+      }
+    }
+  }
+}

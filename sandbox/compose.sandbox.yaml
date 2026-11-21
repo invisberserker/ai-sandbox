@@ -1,0 +1,225 @@
+# =============================================================================
+# Per-project AI sandbox
+# =============================================================================
+# Working mode (project work across days):
+#     just up <project>  →  just attach <project>   (any number of times)
+# One-off mode (fresh OS, in-and-out):
+#     just shell <project>
+# Raw equivalent of the one-off:
+#   cd ~/ai-projects/<project>
+#   docker compose --env-file .sandbox.env \
+#     -f ~/ai-projects/ai-sandbox/sandbox/compose.sandbox.yaml \
+#     --project-directory . --project-name <project> run --rm agent
+#
+# Knobs live in <project>/.sandbox.env (see sandbox/sandbox.env.example;
+# `just new` writes one). Passed via --env-file, so a repo's own `.env`
+# — the standard dotenv file your app reads — is never consulted by the
+# sandbox tooling. Named volumes are namespaced by the project name, so
+# this SAME file serves every project unchanged.
+#
+# ISOLATION MODEL (docs/SECURITY.md): runtime sysbox-runc makes this a
+# "system container" — the agent is root INSIDE (apt install works, /etc is
+# writable), but maps to an unprivileged high UID on the VM; it gets a
+# PRIVATE inner dockerd (never the VM's) and its own network namespace.
+# There is no privileged:true anywhere in this file, on purpose.
+# =============================================================================
+services:
+  agent:
+    image: ${SANDBOX_IMAGE:-ai-opencode:latest}
+
+    # sysbox = rootless user-ns + virtualized /proc,/sys + auto-provisioned
+    # backing store for the inner /var/lib/docker. If sysbox breaks after a
+    # kernel incident, use the FALLBACK profile at the bottom — but read
+    # docs/RUNBOOK.md §sysbox first: the fallback trades away per-project
+    # docker isolation and port collision-freedom.
+    runtime: sysbox-runc
+
+    hostname: ${COMPOSE_PROJECT_NAME:-sandbox}
+    working_dir: /workspace
+    init: true # reap zombies without systemd
+    stdin_open: true
+    tty: true
+    # The entrypoint's supervisor stops the inner dockerd cleanly on the
+    # persistent inner-docker-data volume; give it time to flush.
+    stop_grace_period: 60s
+
+    # ---- Resource guards (protect the shared VM pool from one rogue agent) ---
+    # These are per-sandbox ceilings, enforced by the outer daemon's cgroups.
+    # Defaults fit 2-4 concurrent sandboxes on a 16GiB VM; tune per project
+    # in .sandbox.env rather than here.
+    cpus: ${SANDBOX_CPUS:-4.0}
+    mem_limit: ${SANDBOX_MEM:-8g}
+    # Fork-bomb guard: 2048 PIDs is ample for a parallel build plus a few
+    # inner containers, and starves runaway `while :; fork` loops before
+    # they take the VM down.
+    pids_limit: ${SANDBOX_PIDS:-2048}
+
+    # ---- Reach the VM-hosted services (gateway :4000, mirror :5000) ----------
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    environment:
+      - TERM=xterm-256color
+      # ---------------------------------------------------------------
+      # DUMMY credentials: format-valid so CLI startup validation passes,
+      # worthless if exfiltrated. The gateway (gateway/Caddyfile) swaps
+      # them for real keys in transit. Real keys NEVER enter a sandbox —
+      # if a CLI asks you to paste a real key inside a sandbox, that CLI
+      # is misconfigured (check its gateway wiring, docs/AGENT-CONFIG.md).
+      #
+      # PRIMARY ROUTES:
+      #   opencode flavor → OpenCode Go via /opencode-go
+      #   dsh flavor      → DeepSeek official via /deepseek
+      # Ad-hoc OpenAI-compatible tools use the two OPENAI_* vars below; a
+      # project can retarget them to another gateway route via its .ai.env
+      # (template: sandbox/ai.env.example) — dummy stays, route changes.
+      # ---------------------------------------------------------------
+      # OpenCode Go subscription key (OpenCode v2 reads it via the provider's
+      # standard env vars — the baked v2 config holds no key material).
+      - OPENCODE_API_KEY=oc_sk_sandbox_dummy
+      - OPENCODE_GO_API_KEY=oc_sk_sandbox_dummy
+      # DeepSeek official key (dsh web profile uses this via apiKeyEnv;
+      # ad-hoc OpenAI-compatible tools can use the OPENAI_* aliases below).
+      - DEEPSEEK_API_KEY=sk-deepseek-sandbox-dummy
+      - OPENAI_API_KEY=sk-deepseek-sandbox-dummy
+      - OPENAI_BASE_URL=http://host.docker.internal:4000/deepseek/v1
+      # ---------------------------------------------------------------
+      # Build caches → named volume on the VM's NATIVE disk, not the
+      # virtiofs-mounted /workspace: 10-50x faster for cargo/npm/go I/O,
+      # and keeps target/ + node_modules out of your Mac's source tree and
+      # out of Time Machine backups.
+      # ---------------------------------------------------------------
+      - CARGO_TARGET_DIR=/var/cache/build-targets/cargo
+      - GOCACHE=/var/cache/build-targets/go-build
+      - GOMODCACHE=/var/cache/build-targets/go-mod
+      - npm_config_cache=/var/cache/build-targets/npm
+      - UV_CACHE_DIR=/var/cache/build-targets/uv
+
+    # Per-project environment INSIDE the sandbox: tool env vars
+    # (MAKEFLAGS, UV_PYTHON, proxy vars...), entrypoint knobs like
+    # SANDBOX_DNS, and DUMMY keys for extra gateway routes — never real
+    # keys (the gateway swaps dummies in transit). NOT PATH: setting it
+    # here would REPLACE the image's toolchain PATH. Optional file —
+    # template: sandbox/ai.env.example; requires docker compose >= 2.24
+    # for `required: false`. NOTE the split with .sandbox.env: this
+    # `env_file` block injects every line into the container at start,
+    # while --env-file .sandbox.env only feeds compose's ${VAR}
+    # substitution when rendering the config — that file is never
+    # injected wholesale (a knob enters the container only where the
+    # compose files interpolate it into `environment:`, e.g. DSH_PORT
+    # in compose.dsh.yaml). If both set the same var, `environment:`
+    # wins over `env_file:`.
+    env_file:
+      - path: .ai.env
+        required: false
+
+    volumes:
+      # Source code: the project dir on the Mac (~/ai-projects/<name>),
+      # shared into the VM over lima virtiofs, bind-mounted here. This is
+      # the ONLY host path a sandbox can see.
+      - type: bind
+        source: .
+        target: /workspace
+      # Private inner docker state — survives OS-level sandbox resets (tier 1
+      # in the ephemerality ladder below), so images the agent pulled
+      # (postgres, redis, ...) stay cached for the project. ONE daemon at
+      # a time: `just shell <p>` while the project is `up` puts a second
+      # inner dockerd on this store and corrupts it — use `just attach`.
+      - type: volume
+        source: inner-docker-data
+        target: /var/lib/docker
+      # Toolchain caches on VM-native disk (see env block above).
+      - type: volume
+        source: build-cache
+        target: /var/cache/build-targets
+      # Persist agent-installed global tools + XDG configs across container
+      # resets — "ephemeral OS, persistent tool state". OpenCode's provider
+      # config and auth store live here. These volumes mount OVER image
+      # content: the images install nothing under /root/.config or
+      # /root/.local by design (Dockerfile header note), except deliberate
+      # first-mount seeding (opencode config).
+      - type: volume
+        source: home-config
+        target: /root/.config
+      - type: volume
+        source: home-local
+        target: /root/.local
+      # VS Code server state (for "attach to running container" — see
+      # BOOTSTRAP §IDEs): without this, every fresh container re-downloads
+      # the server + extensions on attach. Harmless for pure-TUI users.
+      - type: volume
+        source: vscode-server
+        target: /root/.vscode-server
+
+    # ---- OPTIONAL: expose sandbox ports to macOS ------------------------------
+    # Ports bound by the INNER docker daemon or a dev server live in THIS
+    # sandbox's network namespace — lima's auto-forward cannot see them
+    # (docs/RUNBOOK.md → "Two network layers"). Uncomment to map a slice of
+    # the sandbox's port space onto the VM (lima then forwards to macOS
+    # localhost). Give every project its own PORT_BASE in .sandbox.env
+    # (e.g. proj-a 3000, proj-b 3200) to avoid VM-level collisions.
+    # Applies to `just up`; for `docker compose run` add --service-ports.
+    # ports:
+    #   - "${PORT_BASE:-3000}-${PORT_BASE_END:-3199}:3000-3199"
+
+    # ---- OPTIONAL: git push auth via the Mac's ssh-agent ----------------------
+    # Default posture: sandboxes COMMIT locally; you PUSH from the Mac.
+    # For agent-managed git (the agent pushes with its own DEDICATED
+    # key, no per-diff review) you need no compose change at all: one
+    # .ai.env line — see docs/SECURITY.md → "Git auth". The block below
+    # is the middle option (forward YOUR keys): a mounted agent socket
+    # lets a rogue agent USE your loaded keys (sign, authenticate) even
+    # though it cannot read the key material — treat as a per-project
+    # trust decision.
+    # environment addition:
+    #   - SSH_AUTH_SOCK=/ssh-agent
+    # volumes addition:
+    #   - type: bind
+    #     source: ${SSH_AUTH_SOCK:-/nonexistent}
+    #     target: /ssh-agent
+
+volumes:
+  inner-docker-data:
+  build-cache:
+  home-config:
+  home-local:
+  vscode-server:
+
+# =============================================================================
+# EPHEMERALITY LADDER (three reset tiers)
+#   1. just shell <p>            — fresh container OS every run: global
+#      packages, /etc edits, rogue cronjobs all vanish; source, caches,
+#      inner images, OpenCode config and dsh state persist on volumes.
+#   2. just purge <p>            — also wipes this project's volumes (inner
+#      images, build caches, agent state). For a dsh project use
+#      `just dsh-purge <p>` so the dsh-home volume is included.
+#   3. just nuke                 — deletes the entire VM. Survivors: source and
+#      secrets (~/.ai-secrets) on the Mac. Volumes die with the VM.
+# =============================================================================
+#
+# =============================================================================
+# DSH (DeepSeek Harness) OVERRIDE
+#   The dsh flavor runs the DSH web UI inside this sandbox. Use
+#   `just dsh-up <project>`; it merges sandbox/compose.dsh.yaml, which
+#   publishes 127.0.0.1:${DSH_PORT}:3080 and mounts the dsh-home volume.
+#   Open http://localhost:${DSH_PORT} on macOS. Other flavors use the
+#   normal `just up`/`just shell`.
+# =============================================================================
+#
+# =============================================================================
+# FALLBACK PROFILE — ONLY while sysbox-runc is broken (kernel incident).
+# 1) Comment out `runtime: sysbox-runc` above AND the inner-docker-data
+#    volume mount. 2) Uncomment the two lines below.
+# SANDBOX_NO_DOCKERD makes the entrypoint skip its inner dockerd — and the
+# stale-socket cleanup that would try to rm the bind-mounted outer socket
+# (EBUSY under set -e = instant container death, so don't mount the socket
+# without it). `docker` inside the sandbox then talks to the VM's GLOBAL
+# daemon. You lose: per-project docker isolation (one agent's `docker
+# system prune -a` hits every project) and localhost port collision-freedom
+# between projects. Fix sysbox (docs/RUNBOOK.md) and restore this file; the
+# fallback is a crutch, not a mode.
+# =============================================================================
+#    environment (add):
+#      - SANDBOX_NO_DOCKERD=1
+#    volumes (add):
+#      - /var/run/docker.sock:/var/run/docker.sock

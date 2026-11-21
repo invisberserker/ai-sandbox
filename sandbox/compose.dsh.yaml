@@ -1,0 +1,39 @@
+# =============================================================================
+# DeepSeek Harness (dsh) override — use with `just dsh-up <project>`
+# =============================================================================
+# The base sandbox runs DSH's web UI as its session process (image CMD), but
+# the base compose file publishes no ports. This override:
+#   - publishes the DSH UI on the VM loopback at ${DSH_PORT}
+#     (lima forwards it to macOS 127.0.0.1:${DSH_PORT})
+#   - persists DSH state/config in a per-project dsh-home volume.
+#
+# Each DSH project needs its own DSH_PORT in <project>/.sandbox.env, e.g.
+# 3080, 3081, 3082. Other projects (opencode/whiteboard) ignore DSH_PORT because they
+# do not use this override.
+#
+# The image's dsh-web launcher passes --trusted-host localhost:${DSH_PORT}
+# and --public-url http://localhost:${DSH_PORT}/ so the browser's Host
+# header is accepted by DSH's /api fence.
+# =============================================================================
+services:
+  agent:
+    environment:
+      # Used by /usr/local/bin/dsh-web for --public-url/--trusted-host.
+      # DSH_PORT / DSH_TRUSTED_HOSTS arrive from .sandbox.env via ${VAR}
+      # interpolation — the one place knob values enter the container.
+      - DSH_PORT=${DSH_PORT:-3080}
+      - DSH_CONTAINER_PORT=3080
+      # Optional space-separated extra authorities (host or host:port).
+      - DSH_TRUSTED_HOSTS=${DSH_TRUSTED_HOSTS:-}
+    ports:
+      - "127.0.0.1:${DSH_PORT:-3080}:3080"
+    volumes:
+      # DSH state, sessions and the baked web profile. Docker seeds a fresh
+      # volume from image content (/root/.dsh) on first mount; later edits
+      # persist. Re-seed by removing the project's dsh-home volume.
+      - type: volume
+        source: dsh-home
+        target: /root/.dsh
+
+volumes:
+  dsh-home:

@@ -1,0 +1,333 @@
+# =============================================================================
+# ai-box — the Lima "AI appliance" VM
+# =============================================================================
+# PURPOSE
+#   One disposable VM, three jobs: run Docker (one shared outer daemon),
+#   host the credential gateway (real API keys live only here, root-only),
+#   host a pull-through registry mirror (N sandboxes pulling the same image
+#   costs one network pull). No project code, no toolchains. The VM is
+#   cattle: keepable state lives on the Mac or in per-project volumes;
+#   `just vm-rebuild` recreates it in minutes.
+#
+# USAGE
+#   Repo lives at ~/ai-projects/ai-sandbox on the Mac (provisioning reads
+#   it through the mount below). `just vm-up`; for a FRESH instance that
+#   is `limactl start --name=ai-box …/vm/ai-box.yaml` (the file form means
+#   create; an existing instance is `limactl start ai-box`).
+#   Machine-local overrides (guest username, sizing): .lima.env at the
+#   repo root — one limactl --set per `path=value` line, applied at
+#   creation (template: .lima.env.example). Changes mean `just vm-rebuild`.
+#
+# HARDWARE SIZING (defaults suit a 32 GB Mac; guidance, leave headroom):
+#   24 GB Mac → 4 cpus / 10GiB   32 GB Mac → 6 / 16GiB (default)
+#   64 GB Mac → 8-12 cpus / 24-32GiB
+#   cpus: a ceiling, idle cost ≈ zero. memory: guest-pinned, host RAM
+#   fills only as used. disk: sparse, grows with guest writes
+#   (host usage: du -sh ~/.lima/ai-box/). All three are creation-time.
+#   120GiB fits ~8-10 active projects (OS 8G + images + per-project
+#   inner volumes + caches). Exclude ~/.lima/ from Time Machine — the VM
+#   is cattle, backing it up is churn, not safety.
+# =============================================================================
+
+vmType: "vz"
+
+# Rosetta: x86_64 binaries run via Apple's binary translation (costs
+# nothing unused). vmOpts.vz.rosetta — the top-level `rosetta:` is
+# deprecated in lima >= 2.x.
+vmOpts:
+  vz:
+    rosetta:
+      enabled: true
+      binfmt: true
+
+cpus: 6
+memory: "16GiB"
+disk: "120GiB"
+
+# --- OS image -----------------------------------------------------------------
+# Ubuntu 24.04 LTS (noble) with the GA 6.8 kernel — the kernel Sysbox CE is
+# validated against. Provisioning step 2 pins this kernel; do NOT move to a
+# newer Ubuntu or HWE kernel without checking Sysbox release notes first
+# (docs/UPDATES.md → "Moving off the pinned kernel").
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
+    arch: "aarch64"
+  # x86_64 fallback keeps this manifest usable on Intel Macs (qemu/vz).
+  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
+    arch: "x86_64"
+
+# --- File sharing ---------------------------------------------------------------
+# virtiofs: the only host-sharing fast enough for source-tree I/O.
+# SCOPE IS THE TIER-0 SECURITY BOUNDARY (docs/SECURITY.md): the VM sees
+# exactly two paths — ~/ai-projects (writable) and ~/.ai-secrets
+# (READ-ONLY, outside the writable share so even a full VM-root
+# compromise can read keys but never touch the Mac's only copy).
+# Everything else on the Mac does not exist from the VM's point of view.
+mountType: "virtiofs"
+mounts:
+  - location: "~/ai-projects"
+    mountPoint: "/mnt/projects"
+    writable: true
+  - location: "~/.ai-secrets"
+    mountPoint: "/mnt/secrets"
+    writable: false
+
+# Lima's bundled containerd is disabled: the VM is a pure appliance whose
+# only container engine is the upstream Docker CE installed below.
+containerd:
+  system: false
+  user: false
+
+# --- Networking ------------------------------------------------------------------
+# hostLoopback: false blocks the guest's path to the Mac's loopback
+# services, so sandboxes cannot reach unauthenticated dev servers on
+# your Mac. DNS, outbound access and `limactl shell` keep working.
+# Requires lima >= 2.3 (vz).
+networkOpts:
+  hostLoopback: false
+
+# Port forwarding: this rule forwards guest ports bound to 0.0.0.0; lima's
+# built-in fallback additionally forwards guest 127.0.0.1. Both land on
+# the Mac's 127.0.0.1. Ports bound only to a specific interface (eth0,
+# docker0) are not forwarded.
+# ⚠ Ports published by a sandbox's INNER docker daemon are invisible to
+#   this rule — they need the ports: block in compose.sandbox.yaml
+#   (docs/RUNBOOK.md → "Two network layers").
+portForwards:
+  - guestIP: "0.0.0.0"
+    guestPortRange: [1024, 65535]
+    hostIP: "127.0.0.1"
+    hostPortRange: [1024, 65535]
+    proto: "tcp"
+
+# =============================================================================
+# Provisioning — idempotent scripts (safe across stop/start and full rebuilds;
+# `limactl start` re-runs them). Order matters.
+# =============================================================================
+provision:
+  # --- 1. Base packages --------------------------------------------------------
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -euxo pipefail
+      export DEBIAN_FRONTEND=noninteractive
+      export NEEDRESTART_MODE=a
+      apt-get update
+      apt-get install -y --no-install-recommends \
+        ca-certificates curl wget jq git gnupg lsb-release \
+        rsync unzip zip htop
+
+  # --- 2. Kernel pinning (the Sysbox compatibility contract) -----------------
+  # Sysbox CE 0.7.x is validated against noble's GA kernel 6.8; an HWE
+  # upgrade breaks every sandbox start with a confusing runc error. Hold
+  # the kernel, drop unattended-upgrades (it ignores holds). Escape hatch:
+  # docs/UPDATES.md → "Moving off the pinned kernel".
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -euxo pipefail
+      KREL="$(uname -r)"                    # e.g. 6.8.0-101-generic
+      # Hold every installed kernel package (cloud images may ship -generic
+      # or -virtual flavors; hold both, ignore what isn't installed).
+      dpkg -l | awk '/^ii  linux-(image|headers)-[0-9]/ {print $2}' \
+        | xargs -r apt-mark hold
+      for p in linux-image-generic linux-headers-generic linux-generic \
+               linux-image-virtual linux-virtual; do
+        apt-mark hold "$p" 2>/dev/null || true
+      done
+      apt-get remove -y unattended-upgrades 2>/dev/null || true
+      rm -f /etc/apt/apt.conf.d/20auto-upgrades
+
+  # --- 3. Outer Docker CE ------------------------------------------------------
+  # One shared daemon for everything: layer cache and page cache shared
+  # by all sandboxes — the memory argument against multiple VMs.
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -euxo pipefail
+      export DEBIAN_FRONTEND=noninteractive
+      if ! command -v dockerd >/dev/null 2>&1; then
+        curl -fsSL https://get.docker.com | sh   # docker-ce + buildx + compose plugins
+      fi
+      install -d /etc/docker
+      cat > /etc/docker/daemon.json <<'EOF'
+      {
+        "registry-mirrors": ["http://127.0.0.1:5000"],
+        "insecure-registries": ["127.0.0.1:5000"],
+        "log-driver": "local",
+        "log-opts": { "max-size": "20m", "max-file": "3" }
+      }
+      EOF
+      # registry-mirrors points at the step-5 cache; insecure-registries is
+      # stated for the plain-HTTP mirror. A down mirror just means slower
+      # pulls (fall through to Docker Hub), never a failure.
+      # The VM user's docker-group membership is applied by `just vm-up`
+      # after the boot — an authenticated session is simpler and more
+      # reliable than doing it inside provisioning.
+
+  # --- 4. Sysbox CE (pinned) — the sandbox runtime ------------------------------
+  # sysbox-runc makes each sandbox a "system container": real root, a
+  # private dockerd and network namespace, WITHOUT privileged:true — via
+  # unprivileged user namespaces. The one component that constrains our
+  # kernel choice (hence step 2).
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -euxo pipefail
+      export DEBIAN_FRONTEND=noninteractive
+      SYSBOX_VERSION="0.7.1"   # bump ONLY together with a kernel change (UPDATES.md)
+      if ! dpkg -l sysbox-ce 2>/dev/null | grep -q '^ii'; then
+        ARCH="$(dpkg --print-architecture)"
+        wget -q -O /tmp/sysbox.deb \
+          "https://github.com/nestybox/sysbox/releases/download/v${SYSBOX_VERSION}/sysbox-ce_${SYSBOX_VERSION}.linux_${ARCH}.deb"
+        apt-get install -y /tmp/sysbox.deb
+        rm -f /tmp/sysbox.deb
+      fi
+      # Belt & braces: guarantee dockerd registers the runtime even if the
+      # .deb's own integration didn't run (fresh daemon.json, restart races).
+      install -d /etc/systemd/system/docker.service.d
+      cat > /etc/systemd/system/docker.service.d/sysbox.conf <<'EOF'
+      [Service]
+      ExecStart=
+      ExecStart=/usr/bin/dockerd --host=fd:// --containerd=/run/containerd/containerd.sock --add-runtime=sysbox-runc=/usr/bin/sysbox-runc
+      EOF
+      systemctl daemon-reload
+      systemctl enable --now sysbox-mgr sysbox-fs
+      systemctl restart docker
+
+  # --- 5. Support service: pull-through registry mirror -------------------------
+  # Each sandbox has its OWN /var/lib/docker volume, so public images would
+  # be re-downloaded per project; the shared mirror makes the 2nd..Nth pull
+  # LAN-speed. Outer daemon via daemon.json; sandboxes' inner daemons via
+  # the image entrypoint.
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -euxo pipefail
+      REGISTRY_IMAGE="registry:3.1.2"
+      # docker0's subnet is chosen by the daemon (not always the classic
+      # 172.17/16) — discover the address and bind to it.
+      BRIDGE_GW=""
+      for _ in $(seq 1 15); do
+        BRIDGE_GW="$(ip -4 addr show dev docker0 2>/dev/null | grep -o "inet [0-9.]*" | head -1 | cut -d" " -f2)"
+        [ -n "$BRIDGE_GW" ] && break
+        sleep 1
+      done
+      [ -n "$BRIDGE_GW" ] || { echo >&2 "docker0 has no IPv4 — is the docker daemon up?"; exit 1; }
+      # A failed run still leaves a "Created" container — check Running,
+      # not existence. Fail loudly if the mirror isn't up afterwards.
+      if ! docker inspect ai-registry-mirror 2>/dev/null | jq -e ".[0].State.Running" >/dev/null 2>&1; then
+        docker rm -f ai-registry-mirror >/dev/null 2>&1 || true
+        docker run -d --name ai-registry-mirror --restart=unless-stopped \
+          -e REGISTRY_PROXY_REMOTEURL=https://registry-1.docker.io \
+          -v registry-mirror-data:/var/lib/registry \
+          -p 127.0.0.1:5000:5000 \
+          -p "${BRIDGE_GW}:5000:5000" \
+          "${REGISTRY_IMAGE}"
+      fi
+      docker inspect ai-registry-mirror | jq -e ".[0].State.Running" >/dev/null
+      # Sandboxes reach the mirror via host.docker.internal:5000 (docker's
+      # host-gateway fills in the real bridge address). 127.0.0.1 serves the
+      # outer daemon's daemon.json lookup.
+
+  # --- 6. Credential gateway (Caddy) ---------------------------------------------
+  # Sandboxes hold dummy keys and point at this gateway; it swaps dummies
+  # for real keys in transit. Protocol-blind: one route per upstream,
+  # Authorization swapped, no translation. Keys are seeded from the Mac
+  # (scripts/seed-secrets.sh via the read-only /mnt/secrets share), so
+  # rebuilds re-seed themselves.
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -euxo pipefail
+      # The Caddyfile uses host-only upstreams; provider base paths are
+      # carried by the agent CLI's base URL (no rewrites). Keep it that way.
+      CADDY_VERSION="2.11.9"
+      if [ ! -x /usr/local/bin/caddy ]; then
+        ARCH="$(dpkg --print-architecture)"
+        curl -fsSL \
+          "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_${ARCH}.tar.gz" \
+          | tar -xz -C /usr/local/bin caddy
+      fi
+      install -d -m 0750 /etc/ai-gateway
+      # The Caddyfile binds {$DOCKER_GATEWAY} — docker0's address, which the
+      # daemon picks, so discover it (never hardcode it).
+      DOCKER_GATEWAY="$(ip -4 addr show dev docker0 2>/dev/null | grep -o "inet [0-9.]*" | head -1 | cut -d" " -f2)"
+      [ -n "$DOCKER_GATEWAY" ] || { echo >&2 "docker0 has no IPv4 — is the docker daemon up?"; exit 1; }
+      printf "DOCKER_GATEWAY=%s\n" "$DOCKER_GATEWAY" > /etc/ai-gateway/bridge.env
+      # Virtiofs mounts race provisioning right after boot; wait briefly for
+      # the repo to appear before copying config out of it.
+      for _ in $(seq 1 30); do
+        [ -f /mnt/projects/ai-sandbox/gateway/Caddyfile ] && break
+        sleep 1
+      done
+      if [ -f /mnt/projects/ai-sandbox/gateway/Caddyfile ]; then
+        install -m 0644 /mnt/projects/ai-sandbox/gateway/Caddyfile /etc/ai-gateway/Caddyfile
+      fi
+      # Idempotent: installs placeholder if the Mac-side secrets file doesn't
+      # exist yet (first boot), real keys otherwise.
+      bash /mnt/projects/ai-sandbox/scripts/seed-secrets.sh || true
+      # Config syntax is a hard gate: a parse error should fail provisioning
+      # with a clear message, not a 403-vs-502 mystery later.
+      if [ -f /etc/ai-gateway/Caddyfile ]; then
+        set -a
+        . /etc/ai-gateway/bridge.env
+        set +a
+        /usr/local/bin/caddy validate \
+          --config /etc/ai-gateway/Caddyfile --adapter caddyfile
+      fi
+      cat > /etc/systemd/system/ai-gateway.service <<'EOF'
+      [Unit]
+      Description=AI credential gateway (base-URL key injection)
+      After=docker.service network-online.target
+      Wants=network-online.target
+      # Binds docker0's gateway ({$DOCKER_GATEWAY} from bridge.env) plus
+      # VM loopback — both exist once docker is up.
+      [Service]
+      Type=simple
+      # Fail closed: without DOCKER_GATEWAY caddy would listen on every
+      # interface — and lima forwards those ports to the Mac.
+      ExecStartPre=/bin/sh -c '[ -n "$DOCKER_GATEWAY" ] || { echo "DOCKER_GATEWAY missing — regenerate /etc/ai-gateway/bridge.env (just gateway-reload)" >&2; exit 1; }'
+      ExecStart=/usr/local/bin/caddy run --config /etc/ai-gateway/Caddyfile --adapter caddyfile
+      EnvironmentFile=/etc/ai-gateway/secrets.env
+      EnvironmentFile=/etc/ai-gateway/bridge.env
+      Restart=on-failure
+      RestartSec=2
+      # The process env holds the real API keys — harden it accordingly:
+      NoNewPrivileges=true
+      ProtectSystem=strict
+      ReadWritePaths=/var/log
+      PrivateTmp=true
+      LimitCORE=0
+      [Install]
+      WantedBy=multi-user.target
+      EOF
+      systemctl daemon-reload
+      systemctl enable --now ai-gateway
+      systemctl restart ai-gateway
+
+# --- Readiness probes -----------------------------------------------------------
+# `limactl start` blocks until these pass — a failed boot fails loudly.
+# Probes run as the VM user over SSH, so the docker ones use sudo: they
+# check the daemon, not the user's socket permissions.
+probes:
+  - description: "outer dockerd is up"
+    script: |
+      #!/bin/bash
+      sudo docker info >/dev/null 2>&1
+  - description: "sysbox-runc runtime is registered"
+    script: |
+      #!/bin/bash
+      # Plain `docker info` lists runtimes. No --format: lima parses scripts
+      # as Go templates, and docker's format strings collide (noisy warning).
+      sudo docker info 2>/dev/null | grep -q sysbox-runc
+  - description: "registry mirror is listening"
+    script: |
+      #!/bin/bash
+      curl -sf -o /dev/null http://127.0.0.1:5000/v2/
+  - description: "credential gateway answers 403 on / (default-deny is up)"
+    script: |
+      #!/bin/bash
+      # docker0's address is discovered, not hardcoded (see step 6).
+      gw="$(ip -4 addr show dev docker0 2>/dev/null | grep -o "inet [0-9.]*" | head -1 | cut -d" " -f2)"
+      [ -n "$gw" ] && [ "$(curl -s -o /dev/null -w '%{http_code}' "http://${gw}:4000/" 2>/dev/null)" = "403" ]

@@ -1,0 +1,14 @@
+# Never commit real secrets. The gateway secrets file is expected OUTSIDE the
+# repo (~/.ai-secrets/, shared READ-ONLY into the VM at /mnt/secrets), but
+# belt-and-braces if someone moves it in:
+.secrets/
+*.env
+!sandbox/sandbox.env.example
+!sandbox/ai.env.example
+!secrets/ai-gateway.env.example
+
+# Repo-root .just.env / .lima.env ride the *.env rule above: machine-local
+# by design, never committed. Templates: .just.env.example, .lima.env.example.
+
+# macOS
+.DS_Store

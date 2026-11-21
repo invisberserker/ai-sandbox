@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# =============================================================================
+# dsh-web — launch the DeepSeek Harness Web UI inside a sysbox sandbox
+# =============================================================================
+# The VM stays agent-less: DSH runs in the sandbox. The browser on macOS
+# reaches this server through sandbox/compose.dsh.yaml, which publishes
+# 127.0.0.1:${DSH_PORT} on the VM; lima forwards that to macOS localhost.
+#
+# DSH's --host rejects wildcard addresses, so we bind to the sandbox's own
+# eth0 address. --trusted-host must include the authority the browser uses
+# (localhost:${DSH_PORT}); otherwise DSH's /api Host/Origin fence rejects it.
+# =============================================================================
+set -euo pipefail
+
+CONTAINER_PORT="${DSH_CONTAINER_PORT:-3080}"
+PUBLIC_PORT="${DSH_PORT:-3080}"
+
+HOST="$(ip -4 route get 1.1.1.1 2>/dev/null \
+  | awk '{for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }}')"
+if [ -z "${HOST}" ]; then
+  HOST="$(hostname -I 2>/dev/null | awk '{print $1}')"
+fi
+if [ -z "${HOST}" ]; then
+  HOST="127.0.0.1"
+fi
+
+TRUSTED=(
+  --trusted-host "localhost:${PUBLIC_PORT}"
+  --trusted-host "127.0.0.1:${PUBLIC_PORT}"
+  --trusted-host "${HOST}:${CONTAINER_PORT}"
+)
+if [ -n "${DSH_TRUSTED_HOSTS:-}" ]; then
+  # Space-separated extra authorities (host or host:port).
+  for h in ${DSH_TRUSTED_HOSTS}; do
+    TRUSTED+=(--trusted-host "${h}")
+  done
+fi
+
+printf '[dsh-web] listening on %s:%s, public http://localhost:%s/\n' \
+  "${HOST}" "${CONTAINER_PORT}" "${PUBLIC_PORT}" >&2
+
+exec dsh --profile web \
+  --no-open \
+  --host "${HOST}" \
+  --port "${CONTAINER_PORT}" \
+  --public-url "http://localhost:${PUBLIC_PORT}/" \
+  "${TRUSTED[@]}"

@@ -1,0 +1,127 @@
+# =============================================================================
+# AI credential gateway — protocol-blind API-key injection
+# =============================================================================
+# WHAT THIS IS
+#   Sandboxes hold format-valid DUMMY keys and base URLs that point here.
+#   The gateway strips a route prefix, forwards the request to one fixed
+#   upstream, and swaps the dummy Authorization value for the real key.
+#   It does NOT parse requests, model ids, or OpenAI/Anthropic/Gemini
+#   formats. The agent CLI and the upstream (OpenCode Console or
+#   DeepSeek) own all protocol/model behavior. Caddy is just a byte pipe.
+#
+# WHY ONE ROUTE PER UPSTREAM, NOT PER MODEL/API FAMILY
+#   OpenCode Go serves every model and API family under one origin:
+#       https://opencode.ai/inference/go/v1
+#         /chat/completions  /responses  /messages
+#         /models/<id>:generateContent, :streamGenerateContent
+#   The TUI may choose a different API family per model; that is fine. One
+#   Caddy block covers all of them, because the path is passed through.
+#   Adding a model to the Go plan requires ZERO gateway changes.
+#
+# THE CONTRACT
+#   agent CLI's native base URL:  https://opencode.ai/inference/go/v1
+#   sandbox base URL:             http://host.docker.internal:4000/opencode-go/inference/go/v1
+#   -> handle_path strips only /opencode-go; upstream receives the native
+#      path /inference/go/v1/... unchanged.
+#
+#   Same for DeepSeek:
+#       https://api.deepseek.com/v1  ->  http://host.docker.internal:4000/deepseek/v1
+#
+#   If an agent CLI uses a nested dev container (inner Docker), its
+#   host.docker.internal points at the inner bridge, not the VM. Use the
+#   VM's docker0 address there instead (`ip -4 addr show dev docker0` on
+#   the VM — it is NOT always 172.17.0.1).
+#
+#   Every other request header passes through untouched: x-opencode-session
+#   (required by OpenCode Go for prompt-cache routing), user-agent,
+#   content-type, anthropic-beta, transfer/streaming headers, etc. The
+#   only edits: Authorization gets the real key, and the dummy key headers
+#   the CLI mirrors into family requests (see the route) get dropped.
+#
+# WHERE IT RUNS
+#   systemd on the VM (vm/ai-box.yaml, provisioning step 6). Real keys live
+#   in /etc/ai-gateway/secrets.env (root:root 0600), seeded from
+#   ~/.ai-secrets/ai-gateway.env on the Mac (scripts/seed-secrets.sh — the
+#   read-only /mnt/secrets share).
+#
+# BINDING
+#   Listeners (bind directive): docker0's address ({$DOCKER_GATEWAY},
+#   from /etc/ai-gateway/bridge.env — the daemon picks the subnet) plus
+#   VM loopback. Nothing binds eth0; the VM is NATted anyway; default-
+#   deny below covers the rest. lima forwards guest loopback to the
+#   Mac's 127.0.0.1, so http://localhost:4000 works from the Mac.
+#
+#   HOSTS (the site addresses): sandboxes call this gateway as
+#   host.docker.internal — the Host header must match the site or
+#   Caddy routes nothing ("NOP" log, empty reply, clients retry
+#   forever). Accept that name plus the bridge IP and loopback.
+# =============================================================================
+{
+	# Plain HTTP on local addresses: no TLS to manage, no admin endpoint.
+	admin off
+	auto_https off
+}
+
+http://host.docker.internal:4000, http://{$DOCKER_GATEWAY}:4000, http://127.0.0.1:4000 {
+	bind {$DOCKER_GATEWAY} 127.0.0.1
+	# --- OpenCode Go (primary) ---------------------------------------------------
+	# One upstream for every Go model and API family. The sandbox config sets
+	# OPENCODE_API_KEY/options.apiKey to a dummy; this line replaces it.
+	handle_path /opencode-go/* {
+		reverse_proxy https://opencode.ai {
+			header_up Host opencode.ai
+			header_up Authorization "Bearer {env.REAL_OPENCODE_API_KEY}"
+			# The CLI mirrors the DUMMY into x-goog-api-key on Gemini-family
+			# requests (observed live; @ai-sdk/google behavior). Upstream
+			# authenticates by Authorization for every family — verified:
+			# a Gemini request succeeded with the dummy still attached.
+			# Drop it rather than swap: a value-setting header_up would add
+			# the header to requests that never sent one. If the echo test
+			# ever shows a NEW family key header, add a matching
+			# header_up - line here.
+			header_up -x-goog-api-key
+		}
+	}
+
+	# --- DeepSeek official (primary for the dsh flavor) ---------------------------
+	# DeepSeek Harness (dsh) web profile uses:
+	#   http://host.docker.internal:4000/deepseek/v1
+	# DSH appends /chat/completions; handle_path strips /deepseek and the
+	# upstream receives /v1/chat/completions.
+	handle_path /deepseek/* {
+		reverse_proxy https://api.deepseek.com {
+			header_up Host api.deepseek.com
+			header_up Authorization "Bearer {env.REAL_DEEPSEEK_API_KEY}"
+		}
+	}
+
+	# --- Third-party gateway-isolated provider template (DISABLED) ---------------
+	# Use this when you care about a third-party provider's key and it offers
+	# a custom OpenAI/Anthropic-compatible base URL. This is opt-in; the
+	# OpenCode flavor can also use direct BYOK (real key in the sandbox) for
+	# one-off providers.
+	#
+	# 1. Add the real key to ~/.ai-secrets/ai-gateway.env:
+	#      REAL_FOO_API_KEY=...
+	# 2. Uncomment the block and replace foo / api.foo.com.
+	# 3. In OpenCode, define a custom provider (see docs/AGENT-CONFIG.md):
+	#      baseURL: http://host.docker.internal:4000/foo/v1
+	#      apiKey:  sk-foo-sandbox-dummy
+	# 4. Add the dummy to that project's .ai.env (template:
+	#    sandbox/ai.env.example — includes a worked Kimi example).
+	# 5. Apply: just seed-secrets && just gateway-reload
+	#
+	# The gateway stays protocol-blind: it only forwards the path after
+	# /foo and injects the auth header.
+	# handle_path /foo/* {
+	# 	reverse_proxy https://api.foo.com {
+	# 		header_up Host api.foo.com
+	# 		header_up Authorization "Bearer {env.REAL_FOO_API_KEY}"
+	# 		# header_up x-api-key "{env.REAL_FOO_API_KEY}"  # only if needed
+	# 	}
+	# }
+
+	# Default-deny: 403 (not 404) so a misconfigured agent fails loudly and
+	# immediately at the gateway instead of timing out upstream.
+	respond 403
+}

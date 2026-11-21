@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# =============================================================================
+# agent-git-auth — install the project's dedicated git SSH key (opt-in)
+# =============================================================================
+# For projects that offload git entirely to the agent (docs/SECURITY.md →
+# "Git auth"): the project's .ai.env carries the key material —
+#
+#     GIT_SSH_KEY_B64=<single-line base64 of the private key>
+#     GIT_SSH_HOST=github.com        (optional; any forge's ssh host)
+#     GIT_AGENT_NAME=…  GIT_AGENT_EMAIL=…   (optional commit identity)
+#
+# Called automatically from /etc/profile.d/ai-sandbox.sh whenever
+# GIT_SSH_KEY_B64 is set (idempotent, near-zero cost); headless scripts
+# call it explicitly once. It materializes:
+#   ~/.ssh/<GIT_SSH_HOST>.key     the private key (0600, re-derived per
+#                                 container — never on a volume, gone
+#                                 after `just clean`)
+#   ~/.ssh/config                 Host block pinning the identity
+#                                 (IdentitiesOnly; accept-new host keys
+#                                 = trust-on-first-use, the pragmatic
+#                                 choice for an ephemeral sandbox)
+#   ~/.gitconfig                  identity, only if GIT_AGENT_* set
+#
+# The remote must be SSH form: git@<host>:<owner>/<repo>.git — switch
+# with `git remote set-url origin …` if the repo was cloned over https.
+#
+# Exits 0 quietly when no key is configured: this script must never
+# break a login shell.
+# =============================================================================
+set -euo pipefail
+
+ARG_QUIET=false
+[ "${1:-}" = "--quiet" ] && ARG_QUIET=true
+
+KEY_B64="${GIT_SSH_KEY_B64:-}"
+
+if [ -z "$KEY_B64" ]; then
+  if [ "$ARG_QUIET" = false ]; then
+    echo "[agent-git-auth] GIT_SSH_KEY_B64 not set — nothing to install (see sandbox/ai.env.example)" >&2
+  fi
+  exit 0
+fi
+
+HOST="${GIT_SSH_HOST:-github.com}"
+SSH_DIR="${HOME:-/root}/.ssh"
+KEY_FILE="$SSH_DIR/agent_ed25519"
+
+install -d -m 0700 "$SSH_DIR"
+
+# Decode into a temp file first: a broken paste must never clobber a
+# working key, and the format is validated before anything is written.
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+if ! printf '%s' "$KEY_B64" | base64 -d > "$tmp" 2>/dev/null; then
+  echo "[agent-git-auth] ERROR: GIT_SSH_KEY_B64 is not valid base64" >&2
+  exit 1
+fi
+if ! head -c 40 "$tmp" | grep -q "PRIVATE KEY"; then
+  echo "[agent-git-auth] ERROR: decoded value does not look like a private key" >&2
+  exit 1
+fi
+chmod 0600 "$tmp"
+
+if [ ! -f "$KEY_FILE" ] || ! cmp -s "$tmp" "$KEY_FILE"; then
+  mv "$tmp" "$KEY_FILE"   # mv preserves the 0600 mode
+  echo "[agent-git-auth] installed $KEY_FILE" >&2
+else
+  rm -f "$tmp"   # already current
+fi
+
+# ssh config: pin the identity for the forge host only. accept-new =
+# trust-on-first-use: no baked known_hosts to go stale.
+CFG="$SSH_DIR/config"
+if ! grep -q "agent-git-auth managed block" "$CFG" 2>/dev/null; then
+  cat >> "$CFG" <<EOF
+# --- agent-git-auth managed block ---
+Host $HOST
+    IdentityFile ~/.ssh/agent_ed25519
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+EOF
+  chmod 0600 "$CFG"
+  echo "[agent-git-auth] pinned $HOST to the agent key in $CFG" >&2
+fi
+
+# Commit identity (optional; otherwise let the project's AGENTS.md
+# instruct the agent to configure git itself).
+if [ -n "${GIT_AGENT_NAME:-}" ]; then
+  git config --global user.name "$GIT_AGENT_NAME"
+fi
+if [ -n "${GIT_AGENT_EMAIL:-}" ]; then
+  git config --global user.email "$GIT_AGENT_EMAIL"
+fi
