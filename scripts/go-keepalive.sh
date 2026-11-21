@@ -18,15 +18,19 @@
 # The curl is a ONE-LINER by design — this is also the line to paste at
 # an interactive `just shell <project>` prompt:
 #
-#   curl -s -H 'Authorization: Bearer oc_sk_sandbox_dummy' -H "x-opencode-session: $(cat /proc/sys/kernel/random/uuid)" -H 'content-type: application/json' -d '{"model":"deepseek-flash","messages":[{"role":"user","content":"tell me a dad joke"}],"max_tokens":100}' http://host.docker.internal:4000/opencode-go/inference/go/v1/chat/completions
+#   curl -s -H 'Authorization: Bearer oc_sk_sandbox_dummy' -H "x-opencode-session: $(cat /proc/sys/kernel/random/uuid)" -H 'content-type: application/json' -d '{"model":"deepseek-v4.1-flash","messages":[{"role":"user","content":"tell me a dad joke"}],"max_tokens":100}' http://host.docker.internal:4000/opencode-go/inference/go/v1/chat/completions
 #
 # Not runnable on the Mac or the VM directly: host.docker.internal only
-# resolves inside containers. deepseek-flash is the Go plan's CHEAPEST
-# model — deliberate: the ping only needs to reach the endpoint, not to
-# be smart (verify ids/prices in the TUI's /models picker). It is a
-# DeepSeek MODEL on the OPENCODE GO route — do not "fix" it to /deepseek,
-# which would spend the separate DeepSeek key and never touch the Go
-# window. Status decode:
+# resolves inside containers. deepseek-v4.1-flash is the Go plan's
+# CHEAPEST model — ~43k requests/5h on Go, the most generous line in the
+# plan's allowance table (https://opencode.ai/console/go) — deliberate:
+# the ping only needs to reach the endpoint, not to be smart. NAME vs ID:
+# the TUI and console display "DeepSeek V4.1 Flash 1017", but the 1017
+# checkpoint suffix is DISPLAY-ONLY — the wire id is deepseek-v4.1-flash
+# (upstream 400s "isn't included in OpenCode Go" on anything else). It
+# is a DeepSeek MODEL on the OPENCODE GO route — do not "fix" it to
+# /deepseek, which would spend the separate DeepSeek key and never touch
+# the Go window. Status decode:
 #   200 = window poked · 400 = payload rejected (model id drifted?) ·
 #   401 = real key missing/rejected → just seed-secrets · 403 = route
 #   prefix wrong (default-deny) · 404/502 = path/base-URL drift or
@@ -45,7 +49,7 @@ trap 'rm -f "$body"' EXIT
 sid="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)"
 
 # The one-liner, with -o/-w bolted on to keep the reply and its status:
-code="$(curl -sS -o "$body" -w '%{http_code}' -H 'Authorization: Bearer oc_sk_sandbox_dummy' -H "x-opencode-session: $sid" -H 'content-type: application/json' -d '{"model":"deepseek-flash","messages":[{"role":"user","content":"tell me a dad joke"}],"max_tokens":100}' http://host.docker.internal:4000/opencode-go/inference/go/v1/chat/completions)" || code=000
+code="$(curl -sS -o "$body" -w '%{http_code}' -H 'Authorization: Bearer oc_sk_sandbox_dummy' -H "x-opencode-session: $sid" -H 'content-type: application/json' -d '{"model":"deepseek-v4.1-flash","messages":[{"role":"user","content":"tell me a dad joke"}],"max_tokens":100}' http://host.docker.internal:4000/opencode-go/inference/go/v1/chat/completions)" || code=000
 
 case "$code" in
   200)
