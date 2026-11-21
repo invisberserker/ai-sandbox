@@ -71,14 +71,19 @@ ubuntu_digest() {
     | tr -d "\\r" | awk "tolower(\$1)==\"docker-content-digest:\"{print \$2}"
 }
 
-# -- collect updates into UPDATES[var]=value ---------------------------------
-declare -A UPDATES=()
+# -- collect updates ----------------------------------------------------------
+# NOTE: no `declare -A` here — macOS /bin/bash is 3.2, which has no
+# associative arrays. Each resolved pin is exported immediately as
+# U_<VAR>=<value> (the python rewrite below reads them from the
+# environment); N_PINS counts only the pins that actually resolved.
+N_PINS=0
 want() { # want <var> <resolved-value-or-empty>
   local var="$1" val="${2:-}"
   if [ -z "$val" ]; then
     echo "  !! $var: could not resolve latest — leaving current pin" >&2
   else
-    UPDATES["$var"]="$val"
+    export "U_$var=$val"
+    N_PINS=$((N_PINS + 1))
     echo "  $var -> $val"
   fi
 }
@@ -108,13 +113,12 @@ case "$MODE" in
     ;;
 esac
 
-if [ "${#UPDATES[@]}" -eq 0 ]; then
+if [ "$N_PINS" -eq 0 ]; then
   echo "nothing to update." >&2
   exit 1
 fi
 
 # -- rewrite docker-bake.hcl (atomic; fails loudly if a pattern is missing) ----
-for k in "${!UPDATES[@]}"; do export "U_$k=${UPDATES[$k]}"; done
 python3 - "$BAKE" <<'PY'
 import os, re, sys, tempfile
 

@@ -66,12 +66,18 @@ The entrypoint prints `[sandbox-init] ERROR ... Log tail:` — read it.
 
 ## DNS: nested containers can't resolve
 
-The entrypoint passes `--dns=<sandbox gateway>` to the inner daemon
-because Docker refuses to hand a `127.0.0.11` resolv.conf to nested
-containers. If a specific project breaks: inside the sandbox check
-`docker run --rm busybox nslookup google.com`; override with
-`SANDBOX_DNS=1.1.1.1` in the project's `.ai.env` — entrypoint knobs are
-container env, and nothing interpolates `SANDBOX_*` into
+The entrypoint passes `--dns=<upstream>` to the inner daemon because
+Docker refuses to hand a `127.0.0.11` resolv.conf to nested containers.
+The upstream is chosen by a live probe at sandbox boot: `SANDBOX_DNS` if
+set, else the sandbox gateway IF it answers a DNS query (dig, 1 s
+bound), else 1.1.1.1 with a WARN in the entrypoint log. The probe exists
+because the gateway is an assumption nothing provisions: the VM's plain
+bridges carry no :53 listener, and dogfooded/nested deployments of this
+stack (where the outer gateway equally has none) used to leave every
+inner container with dead DNS. If a specific project still breaks:
+inside the sandbox check `docker run --rm busybox nslookup google.com`;
+override with `SANDBOX_DNS=<ip>` in the project's `.ai.env` — entrypoint
+knobs are container env, and nothing interpolates `SANDBOX_*` into
 `environment:`, so `.sandbox.env` cannot deliver them.
 
 ## git: "detected dubious ownership"

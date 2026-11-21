@@ -145,24 +145,39 @@ the date tag).
 The naive pattern — start dockerd in the background, readiness-poll, then
 `exec "$@"` — leaves the inner dockerd with **no graceful shutdown path**:
 on `docker stop`, tini forwards SIGTERM to its direct child only (the
-exec'd session command, which has no handler and dies instantly); the
-background daemon is a grandchild nobody signals, and once the main
-process exits, Docker hard-kills the cgroup. The daemon therefore always
-ends up SIGKILLed mid-write. With a throwaway container that's harmless;
-with our **persistent** `inner-docker-data` volume it's a corruption
-lottery for the image store ("failed to read …json" on a future boot,
-cure = `just purge`).
+exec'd session command — which dies instantly if it has no handler, or, if
+it's the interactive bash of `just up`, IGNORES SIGTERM outright and hangs
+the stop until docker's grace-period SIGKILL); the background daemon is a
+grandchild nobody signals, and once the main process exits, Docker
+hard-kills the cgroup. The daemon therefore always ends up SIGKILLed
+mid-write. With a throwaway container that's harmless; with our
+**persistent** `inner-docker-data` volume it's a corruption lottery for
+the image store ("failed to read …json" on a future boot, cure = `just
+purge`).
 
 `docker-entrypoint.sh` instead keeps the shell alive as a supervisor:
 the session command runs as a background *child* (no exec), and
-`trap shutdown TERM INT` installs a handler that converts "container is
-stopping" into "run cleanup" — forward TERM to both children, reap the
-session (preserving its exit code), give dockerd a bounded 10 s to flush
-metadata to the volume, escalate to SIGKILL only past that bound. The
-same `shutdown` runs on plain session exit (`exit` typed in the shell),
-so both exit paths converge; it's idempotent, so running twice is safe.
-Signal chain: docker → tini (reaps zombies) → supervisor → {session,
-dockerd}. Details inline in `images/docker-entrypoint.sh`.
+`trap shutdown TERM INT` converts "container is stopping" into "run
+cleanup", asking each child to leave in the way it actually honors:
+
+- **Session: SIGHUP first, not TERM.** An interactive bash on the compose
+  PTY (`tty: true` → `just up`) ignores SIGTERM — the old TERM-here
+  design hung the stop until docker's grace-period SIGKILL. HUP is
+  honored and propagates to the session's jobs (tmux, dev servers);
+  if it lingers past a bounded ~5 s, escalate to SIGKILL, then reap
+  (preserving the session's exit code on the plain-exit path).
+- **dockerd: graceful TERM, bounded flush, then KILL.** A daemon honors
+  SIGTERM, so it gets TERM and up to 10 s to flush metadata to the
+  volume; SIGKILL only past that bound. Nothing to do under
+  `SANDBOX_NO_DOCKERD`.
+
+The same `shutdown` runs on plain session exit (`exit` typed in the
+shell), so both exit paths converge; it's idempotent (traps reset
+first, every kill guarded), so running twice is safe. The bounds
+(~5 s + 10 s) sit far inside the compose `stop_grace_period: 60s`, so a
+`docker stop` returns in seconds — no grace-period roulette. Signal
+chain: docker → tini (reaps zombies) → supervisor → {session, dockerd}.
+Details inline in `images/docker-entrypoint.sh`.
 
 ## Anything else worth knowing?
 

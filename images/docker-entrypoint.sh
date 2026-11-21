@@ -19,7 +19,8 @@
 # Debug knobs (set via compose env or docker run -e):
 #   SANDBOX_DEBUG=1        print docker version at boot + dockerd log tail
 #                          on exit
-#   SANDBOX_DNS=<ip>       override the inner daemon's embedded-DNS upstream
+#   SANDBOX_DNS=<ip>       pin the inner daemon's DNS upstream (trusted
+#                          as-is — skips the boot-time gateway probe)
 #   SANDBOX_NO_MIRROR=1    don't point the inner daemon at the VM registry
 #                          mirror (for running images outside this VM)
 #   SANDBOX_MIRROR_HOST=h  override mirror host (default host.docker.internal)
@@ -56,12 +57,28 @@ mkdir -p "${CARGO_TARGET_DIR:-/var/cache/build-targets/cargo}" \
 # --- 3. Inner dockerd flags (skipped entirely under SANDBOX_NO_DOCKERD) -------
 # DNS: outer compose gives this sandbox resolv.conf 127.0.0.11 (docker's
 # embedded DNS). The inner daemon REFUSES 127.x upstreams and would silently
-# fall back to 8.8.8.8 — surprise egress. Instead use the sandbox's default
-# gateway (the VM bridge, which forwards to the VM's systemd-resolved),
-# unless SANDBOX_DNS overrides.
+# fall back to 8.8.8.8 — surprise egress. The default gateway is the usual
+# candidate (the VM bridge is EXPECTED to forward to the VM's resolver) —
+# but nothing in the provisioning installs that forwarder, and this stack
+# is also run dogfooded/nested where the outer gateway has no :53 listener
+# at all: either way, blindly trusting the gateway left every inner
+# container with dead DNS. So VERIFY the candidate with a live query
+# before trusting it (dnsutils is baked into the base image), and fall
+# back loudly — unlike dockerd's own silent 8.8.8.8.
+dns_probe() { # dns_probe <ip> — true iff <ip>:53 answers a DNS query
+  [ -n "${1:-}" ] || return 1
+  dig +time=1 +tries=1 "@$1" docker.com A >/dev/null 2>&1
+}
 if [ -z "${SANDBOX_NO_DOCKERD:-}" ]; then
   HOST_GW="$(ip route show default 2>/dev/null | awk '{print $3; exit}' || true)"
-  INNER_DNS="${SANDBOX_DNS:-${HOST_GW:-1.1.1.1}}"
+  if [ -n "${SANDBOX_DNS:-}" ]; then
+    INNER_DNS="${SANDBOX_DNS}"    # explicit pin — trusted as-is
+  elif dns_probe "${HOST_GW:-}"; then
+    INNER_DNS="${HOST_GW}"        # the intended case: bridge forwards DNS
+  else
+    log "gateway ${HOST_GW:-<none>} has no DNS listener — inner containers get 1.1.1.1 (pin another with SANDBOX_DNS)"
+    INNER_DNS="1.1.1.1"
+  fi
 
   # Registry mirror: the VM's pull-through cache (vm/ai-box.yaml step 5) so
   # the Nth sandbox pulling postgres:16 is a LAN-speed operation.
