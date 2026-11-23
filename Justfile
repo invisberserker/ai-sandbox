@@ -275,11 +275,14 @@ ls vm=vm_name:
         docker ps | tail -n +2 | awk "{print \$NF}"
         echo "==vol=="
         docker volume ls -q
+        echo "==relay=="
+        docker ps --filter label=ai-sandbox.relay --format "{{"{{"}}.Names{{"}}"}} {{"{{"}}.Label \"ai-sandbox.target\"{{"}}"}}"
       ' 2>/dev/null)"; then vm_ok=1; fi
-    running=""; volumes=""
+    running=""; volumes=""; relaymap=""
     if [ "$vm_ok" = 1 ]; then
         running="$(printf '%s\n' "$vm_out" | sed -n '/^==ps==$/,/^==vol==$/p' | sed '1d;$d')"
-        volumes="$(printf '%s\n' "$vm_out" | sed -n '/^==vol==$/,$p' | sed '1d')"
+        volumes="$(printf '%s\n' "$vm_out" | sed -n '/^==vol==$/,/^==relay==$/p' | sed '1d;$d')"
+        relaymap="$(printf '%s\n' "$vm_out" | sed -n '/^==relay==$/,$p' | sed '1d')"
     fi
     have() { printf '%s\n' "$1" | grep -qxF -- "$2" 2>/dev/null; }
 
@@ -333,8 +336,13 @@ ls vm=vm_name:
                     | sed 's/[[:space:]]*#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//')"
                 extra="  http://localhost:${port:-3080}"
             fi
-            relays="$(printf '%s\n' "$running" | grep -E -- "^${fname}-expose-[0-9]+$" 2>/dev/null \
-                | sed 's/.*-expose-//' | sort -n | sed 's/^/:/' | tr '\n' ' ' | sed 's/ *$//' || true)"
+            relays="$(printf '%s\n' "$relaymap" | awk -v p="${fname}-expose-" '
+                index($1, p) == 1 {
+                    h = $1; sub(".*-expose-", "", h)
+                    t = $2; sub("^agent:", "", t)
+                    if (t == "") t = h
+                    printf "%s:%s\n", h, t
+                }' 2>/dev/null | sort -n | tr '\n' ' ' | sed 's/ *$//' || true)"
             [ -n "$relays" ] && extra="${extra}    relays ${relays}"
             # tree glyph: └─ on the flavor used last within this project
             later=""
@@ -696,7 +704,10 @@ unexpose name spec="" vm=vm_name:
           echo "released all relays for {{name}}"
         '
     else
-        limactl shell "$vm" -- bash -lc "docker rm -f {{name}}-expose-$key >/dev/null 2>&1 && echo \"released {{name}} claim on :$key\" || echo \"no relay: {{name}}-expose-$key\""
+        # Existence decides the message — never docker rm's exit status
+        # (docker 29's `rm -f` is idempotent: a missing container still
+        # "succeeds", which used to print a false "released").
+        limactl shell "$vm" -- bash -lc "if docker ps -aq --filter name=\"^{{name}}-expose-$key$\" | grep -q .; then docker rm -f {{name}}-expose-$key >/dev/null; echo \"released {{name}} claim on :$key\"; else echo \"no relay: {{name}}-expose-$key\"; fi"
     fi
 
 # ─── deepseek helpers ─────────────────────────────────────────────────────────
