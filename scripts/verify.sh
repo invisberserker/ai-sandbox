@@ -163,9 +163,10 @@ echo "== two flavors, one dir, concurrently (the suffix model) =="
 # Boots the same project dir as BOTH flavors at once: separate compose
 # projects (bare name vs -dsh), disjoint volumes/networks, the ports
 # window merged for both with the dsh override REPLACING the opencode
-# one (!override), OS-env SANDBOX_IMAGE beating --env-file, and one
-# ad-hoc expose relay answering on the VM loopback. This mirrors what
-# the Justfile's compose wrapper builds for `just up <p>` + `up <p>-dsh`.
+# one (!override), OS-env SANDBOX_IMAGE beating --env-file, one ad-hoc
+# expose relay answering on the VM loopback, and the designed loud
+# refusal of an in-window relay claim. This mirrors what the Justfile's
+# compose wrapper builds for `just up <p>` + `up <p>-dsh`.
 SMOKE="smoke-conc-$$"
 SMOKE_DIR="/mnt/projects/$SMOKE"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -174,6 +175,9 @@ if ! image_exists ai-opencode:latest || ! image_exists ai-deepseek:latest; then
 else
   mkdir -p "$SMOKE_DIR"
   # The stale SANDBOX_IMAGE line is deliberate: proves OS env wins.
+  # DSH_PORT=3099 is deliberately NOT the 3080 default: a REAL dsh project
+  # may be up on the VM (e.g. the user's own) — the smoke must never claim
+  # its port. Same idea as the windows below (3530s / 3540s).
   printf '%s\n' \
     'SANDBOX_IMAGE=ai-whiteboard:latest' \
     'SANDBOX_PORTS=1' \
@@ -226,40 +230,68 @@ else
     bad "conc: OS env SANDBOX_IMAGE beats the --env-file value"
   fi
 
+  # Relay end-to-end: a listener inside the sandbox, relayed to the VM's
+  # loopback via service-name DNS. Port 3611 is OUTSIDE both windows on
+  # purpose — an in-window port (3531) is claimed by the smoke project's
+  # own PORT_BASE publish already; that refusal gets its own assertion
+  # right after (host-docker collision semantics, by design).
+  RPORT=3611
   cid="$(docker ps -q --filter name="^${SMOKE}-agent-1$" | head -1)"
   if [ -n "$cid" ]; then
-    docker exec -d "$cid" python3 -m http.server 3531 >/dev/null 2>&1
+    docker exec -d "$cid" python3 -m http.server $RPORT >/dev/null 2>&1
     sleep 1
-    docker rm -f "${SMOKE}-expose-3531" >/dev/null 2>&1 || true
-    if docker run -d --rm --name "${SMOKE}-expose-3531" \
+    docker rm -f "${SMOKE}-expose-$RPORT" >/dev/null 2>&1 || true
+    if docker run -d --rm --name "${SMOKE}-expose-$RPORT" \
          --network "${SMOKE}_default" \
-         -p 127.0.0.1:3531:3531 \
-         --label ai-sandbox.relay="$SMOKE" --label ai-sandbox.target=agent:3531 \
-         alpine/socat tcp-listen:3531,fork,reuseaddr tcp:agent:3531 >/dev/null 2>&1; then
-      if curl -sf --max-time 8 http://127.0.0.1:3531/ >/dev/null 2>&1; then
+         -p 127.0.0.1:$RPORT:$RPORT \
+         --label ai-sandbox.relay="$SMOKE" --label ai-sandbox.target=agent:$RPORT \
+         alpine/socat tcp-listen:$RPORT,fork,reuseaddr tcp:agent:$RPORT >/dev/null 2>&1; then
+      if curl -sf --max-time 8 "http://127.0.0.1:$RPORT/" >/dev/null 2>&1; then
         ok "conc: expose relay serves loopback via service-name DNS"
       else
         bad "conc: expose relay answered (curl through socat + agent DNS)"
       fi
-      docker rm -f "${SMOKE}-expose-3531" >/dev/null 2>&1 || true
+      docker rm -f "${SMOKE}-expose-$RPORT" >/dev/null 2>&1 || true
     else
       bad "conc: expose relay started (alpine/socat via the mirror?)"
+    fi
+    # The designed conflict: a relay claiming a port the window already
+    # holds must fail loudly — never a silent remap.
+    docker rm -f "${SMOKE}-expose-conflict" >/dev/null 2>&1 || true
+    if docker run -d --rm --name "${SMOKE}-expose-conflict" \
+         --network "${SMOKE}_default" \
+         -p 127.0.0.1:3531:3531 \
+         alpine/socat tcp-listen:3531,fork,reuseaddr tcp:agent:3531 >/dev/null 2>&1; then
+      docker rm -f "${SMOKE}-expose-conflict" >/dev/null 2>&1 || true
+      bad "conc: in-window relay claim NOT refused (3531 sits inside the 3530-3539 window)"
+    else
+      ok "conc: in-window relay claim refused loudly (port already allocated)"
     fi
   else
     bad "conc: expose relay — opencode container missing"
   fi
 
-  dsh_ok=0
-  for _ in 1 2 3 4 5 6 7 8; do
-    if curl -sf --max-time 3 -o /dev/null "http://127.0.0.1:3099/"; then dsh_ok=1; break; fi
-    sleep 2
+  # The dsh web UI check proves the PUBLISH + launcher are up — any HTTP
+  # status counts (DSH auth-fences bare requests: a 401/403 still proves
+  # the port answers; the browser flow does the real validation).
+  dsh_code=""
+  dsh_i=0
+  while [ "$dsh_i" -lt 12 ]; do
+    dsh_code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:3099/" 2>/dev/null || true)"
+    case "$dsh_code" in
+        ""|000) sleep 5; dsh_i=$((dsh_i + 1)) ;;
+        *) break ;;
+    esac
   done
-  if [ "$dsh_ok" = 1 ]; then
-    ok "conc: dsh web UI answers on its loopback publish"
-  else
-    bad "conc: dsh web UI answers on its loopback publish (boot slow? re-run)"
-  fi
+  case "$dsh_code" in
+      ""|000) bad "conc: dsh web UI on 127.0.0.1:3099 — no HTTP response after ~60s (last code: '${dsh_code:-none}' — boot slow? re-run verify)" ;;
+      *) ok "conc: dsh web UI answers on 127.0.0.1:3099 (HTTP $dsh_code — any status proves the publish + launcher are up)" ;;
+  esac
 
+  # sweep every smoke relay by label (name-agnostic — covers any variant a
+  # killed run might have left), then both projects down -v
+  relay_ids="$(docker ps -aq --filter label=ai-sandbox.relay="$SMOKE" 2>/dev/null)"
+  [ -n "$relay_ids" ] && docker rm -f $relay_ids >/dev/null 2>&1 || true
   docker rm -f "${SMOKE}-expose-3531" >/dev/null 2>&1 || true
   SANDBOX_IMAGE=ai-opencode:latest docker compose --env-file "$SMOKE_DIR/.sandbox.env" \
     -f "$REPO_DIR/sandbox/compose.sandbox.yaml" -f "$REPO_DIR/sandbox/compose.ports.yaml" \
