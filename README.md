@@ -193,7 +193,7 @@ sandbox/compose.dsh.ports.yaml  opt-in dsh dev window (same SANDBOX_PORTS switch
 sandbox/*.env.example        templates: .sandbox.env (knobs), .ai.env (container env)
 gateway/Caddyfile        protocol-blind credential gateway (OpenCode Go + DeepSeek)
 scripts/bump.sh          refresh version pins from upstream
-scripts/verify.sh        smoke tests: VM, images, sandbox semantics, two-flavor concurrency
+scripts/verify.sh        smoke tests: VM, images, sandbox semantics, three-flavor concurrency
 scripts/seed-secrets.sh  install gateway keys from the Mac
 scripts/go-keepalive.sh  the OpenCode Go keepalive curl (run by `just activate`)
 docs/                    ARCHITECTURE / BOOTSTRAP / COMMANDS / UPDATES / SECURITY / RUNBOOK / AGENT-CONFIG / FAQ / ARCHIVE / OPENAI-PLUS

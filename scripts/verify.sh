@@ -8,9 +8,9 @@
 #   images    : toolchain binaries answer --version (fast; entrypoint bypassed)
 #   sandbox   : ONE full sysbox boot — inner dockerd up, PRIVATE (docker ps
 #               empty), user namespace really in effect, OpenCode functional
-#   conc      : two flavors of ONE dir at once (suffix model) — disjoint
-#               volumes, opt-in dsh window via !override, OS-env image
-#               precedence, one expose relay
+#   conc      : all three flavors of ONE dir at once (suffix model) —
+#               disjoint volumes, opt-in dsh window via !override, OS-env
+#               image precedence, one expose relay
 #
 # Deliberately NOT set -e: we want the full report, not first-fail abort.
 # Exit code is nonzero iff anything failed.
@@ -160,19 +160,21 @@ else
   bad "sandbox semantics skipped — ai-opencode:latest missing"
 fi
 
-echo "== two flavors, one dir, concurrently (the suffix model) =="
-# Boots the same project dir as BOTH flavors at once: separate compose
-# projects (bare name vs -dsh), disjoint volumes/networks, the opt-in
-# ports window merged for both with the dsh override REPLACING the
-# opencode one (!override), OS-env SANDBOX_IMAGE beating --env-file, one
-# ad-hoc expose relay answering on the VM loopback, and the designed loud
-# refusal of an in-window relay claim. This mirrors what the Justfile's
-# compose wrapper builds for `just up <p>` + `up <p>-dsh`.
+echo "== all flavors, one dir, concurrently (the suffix model) =="
+# Boots the same project dir as all THREE flavors at once: separate
+# compose projects (bare name vs -dsh vs -clean), disjoint
+# volumes/networks, the opt-in ports window merged for both with the dsh
+# override REPLACING the opencode one (!override), OS-env SANDBOX_IMAGE
+# beating --env-file, one ad-hoc expose relay answering on the VM
+# loopback, and the designed loud refusal of an in-window relay claim.
+# This mirrors what the Justfile's compose wrapper builds for `up <p>`
+# + `up <p>-dsh` (+ `up <p>-clean`, the windowless leg — see below).
 SMOKE="smoke-conc-$$"
 SMOKE_DIR="/mnt/projects/$SMOKE"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-if ! image_exists ai-opencode:latest || ! image_exists ai-deepseek:latest; then
-  bad "concurrency smoke skipped — build both flavors first (just build)"
+if ! image_exists ai-opencode:latest || ! image_exists ai-deepseek:latest \
+   || ! image_exists ai-whiteboard:latest; then
+  bad "concurrency smoke skipped — build all three flavors first (just build)"
 else
   mkdir -p "$SMOKE_DIR"
   # The conflicting SANDBOX_IMAGE line is deliberate: proves OS env wins.
@@ -200,16 +202,28 @@ else
     && ok "conc: dsh sandbox boots alongside (project $SMOKE-dsh)" \
     || bad "conc: dsh sandbox boots alongside (project $SMOKE-dsh)"
 
+  # The -clean leg runs WINDOWLESS on purpose: the smoke env's single
+  # PORT_BASE is already claimed by the opencode project — a second
+  # claim is the designed loud failure (concurrent window projects need
+  # distinct ranges; the dsh leg shows the per-flavor window instead).
+  SANDBOX_IMAGE=ai-whiteboard:latest docker compose --env-file "$SMOKE_DIR/.sandbox.env" \
+    -f "$REPO_DIR/sandbox/compose.sandbox.yaml" \
+    --project-directory "$SMOKE_DIR" --project-name "$SMOKE-clean" up -d >/dev/null 2>&1 \
+    && ok "conc: whiteboard (-clean) boots alongside both agents" \
+    || bad "conc: whiteboard (-clean) boots alongside both agents"
+
   if docker ps --filter name="^${SMOKE}-agent-1$" --filter status=running -q | grep -q . \
-     && docker ps --filter name="^${SMOKE}-dsh-agent-1$" --filter status=running -q | grep -q .; then
-    ok "conc: both service containers running side by side"
+     && docker ps --filter name="^${SMOKE}-dsh-agent-1$" --filter status=running -q | grep -q . \
+     && docker ps --filter name="^${SMOKE}-clean-agent-1$" --filter status=running -q | grep -q .; then
+    ok "conc: all three service containers running side by side"
   else
-    bad "conc: both service containers running side by side"
+    bad "conc: all three service containers running side by side"
   fi
 
   if docker volume ls --format '{{.Name}}' | grep -q "^${SMOKE}_inner-docker-data$" \
      && docker volume ls --format '{{.Name}}' | grep -q "^${SMOKE}-dsh_inner-docker-data$" \
-     && docker volume ls --format '{{.Name}}' | grep -q "^${SMOKE}-dsh_dsh-home$"; then
+     && docker volume ls --format '{{.Name}}' | grep -q "^${SMOKE}-dsh_dsh-home$" \
+     && docker volume ls --format '{{.Name}}' | grep -q "^${SMOKE}-clean_inner-docker-data$"; then
     ok "conc: per-flavor volume namespaces (no shared docker stores)"
   else
     bad "conc: per-flavor volume namespaces (no shared docker stores)"
@@ -313,6 +327,9 @@ else
     -f "$REPO_DIR/sandbox/compose.sandbox.yaml" -f "$REPO_DIR/sandbox/compose.ports.yaml" \
     -f "$REPO_DIR/sandbox/compose.dsh.yaml" -f "$REPO_DIR/sandbox/compose.dsh.ports.yaml" \
     --project-directory "$SMOKE_DIR" --project-name "$SMOKE-dsh" down -v >/dev/null 2>&1 || true
+  SANDBOX_IMAGE=ai-whiteboard:latest docker compose --env-file "$SMOKE_DIR/.sandbox.env" \
+    -f "$REPO_DIR/sandbox/compose.sandbox.yaml" \
+    --project-directory "$SMOKE_DIR" --project-name "$SMOKE-clean" down -v >/dev/null 2>&1 || true
   rm -rf "$SMOKE_DIR"
   if ! docker ps -aq --filter name="^${SMOKE}" | grep -q . && ! docker volume ls -q | grep -q "^${SMOKE}"; then
     ok "conc: teardown clean (containers, volumes, smoke dir gone)"

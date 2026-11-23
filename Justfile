@@ -249,7 +249,7 @@ bump-agents:
 bump-all:
     bash "{{repo_dir}}/scripts/bump.sh" --all
 
-# verify [VM] — smoke-test the VM, images, sandbox semantics, and two-flavor concurrency.
+# verify [VM] — smoke-test the VM, images, sandbox semantics, and three-flavor concurrency.
 [group('images')]
 verify name=vm_name:
     limactl shell {{name}} -- bash {{repo_in_vm}}/scripts/verify.sh
@@ -610,14 +610,22 @@ unexpose name spec="" vm=vm_name:
 # (no VM roundtrip). The first-auth token is NOT here — it lives in the
 # startup logs: `just logs <p>-dsh`.
 
-# dsh-url NAME[-dsh] — print the plain macOS URL for a dsh project.
+# dsh-url NAME[-dsh|-clean] — print the project's plain DSH macOS URL.
 [group('projects')]
 dsh-url name:
     #!/bin/bash
     set -euo pipefail
+    # A PROJECT-level question: the bare, -dsh and -clean names all
+    # resolve to the same dir — the DSH flavor's URL comes from the
+    # project's flavor-agnostic .sandbox.env, whichever flavor you
+    # named. Unscaffolded names error instead of inventing a URL.
     p="{{name}}"
-    f="$HOME/ai-projects/${p%-dsh}/.sandbox.env"
-    port="$(sed -n 's/^DSH_PORT=//p' "$f" 2>/dev/null | tail -1 \
+    case "$p" in
+        *-dsh|*-clean) p="${p%-*}" ;;
+    esac
+    f="$HOME/ai-projects/$p/.sandbox.env"
+    [ -f "$f" ] || { echo "no ~/ai-projects/$p/.sandbox.env (try: just new $p)" >&2; exit 1; }
+    port="$(sed -n 's/^DSH_PORT=//p' "$f" | tail -1 \
       | sed 's/[[:space:]]*#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//')"
     echo "http://localhost:${port:-3080}"
 
