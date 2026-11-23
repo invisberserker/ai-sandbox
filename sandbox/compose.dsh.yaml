@@ -1,15 +1,21 @@
 # =============================================================================
-# DeepSeek Harness (dsh) override — use with `just dsh-up <project>`
+# DeepSeek Harness (dsh) override — merged by the Justfile for `-dsh`
+# projects (compose.sandbox.yaml, then compose.ports.yaml if enabled, then
+# THIS file — order matters, see the ports block below).
 # =============================================================================
-# The base sandbox runs DSH's web UI as its session process (image CMD), but
-# the base compose file publishes no ports. This override:
+# The base sandbox runs DSH's web UI as its session process (image CMD),
+# but the base compose file publishes no ports. This override:
 #   - publishes the DSH UI on the VM loopback at ${DSH_PORT}
 #     (lima forwards it to macOS 127.0.0.1:${DSH_PORT})
+#   - REPLACES the opencode dev-server window with the dsh flavor's own
+#     (${DSH_PORT_BASE}) — `ports: !override` (compose >= 2.24) instead
+#     of a union, so the two flavors of one project never claim the same
+#     VM range.
 #   - persists DSH state/config in a per-project dsh-home volume.
 #
-# Each DSH project needs its own DSH_PORT in <project>/.sandbox.env, e.g.
-# 3080, 3081, 3082. Other projects (opencode/whiteboard) ignore DSH_PORT because they
-# do not use this override.
+# Each concurrently running DSH project needs its own DSH_PORT (and, if
+# SANDBOX_PORTS=1 is on, its own DSH_PORT_BASE window) in its
+# .sandbox.env. Other flavors never see this file.
 #
 # The image's dsh-web launcher passes --trusted-host localhost:${DSH_PORT}
 # and --public-url http://localhost:${DSH_PORT}/ so the browser's Host
@@ -24,9 +30,16 @@ services:
       - DSH_PORT=${DSH_PORT:-3080}
       - DSH_CONTAINER_PORT=3080
       # Optional space-separated extra authorities (host or host:port).
+      # Usually unnecessary: localhost:${DSH_PORT} and 127.0.0.1:${DSH_PORT} are
+      # trusted by the launcher.
       - DSH_TRUSTED_HOSTS=${DSH_TRUSTED_HOSTS:-}
-    ports:
+    # !override REPLACES any window from compose.ports.yaml for dsh
+    # projects (merged files union ports lists by default — exactly what
+    # we must avoid when both flavors of one dir run concurrently).
+    # Identity mapping, same as the base window: sandbox N → Mac N.
+    ports: !override
       - "127.0.0.1:${DSH_PORT:-3080}:3080"
+      - "127.0.0.1:${DSH_PORT_BASE:-3200}-${DSH_PORT_BASE_END:-3399}:${DSH_PORT_BASE:-3200}-${DSH_PORT_BASE_END:-3399}"
     volumes:
       # DSH state, sessions and the baked web profile. Docker seeds a fresh
       # volume from image content (/root/.dsh) on first mount; later edits

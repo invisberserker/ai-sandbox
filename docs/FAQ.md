@@ -64,10 +64,13 @@ your project's memory, and the split follows what carries the context:
   concurrent sandboxes).
 - **`shell` is the one-off verb.** Fresh container, removed at exit —
   right for a short, well-defined task in a CLOSED project: a quick
-  edit, an inspection, asking an agent for a dad joke. Never while the
-  project is already `up` — the one-off container would put a second
-  inner daemon on the project's docker store and corrupt it
-  ([RUNBOOK.md](RUNBOOK.md); use `attach`).
+  edit, an inspection, asking an agent for a dad joke. Never while that
+  flavor is already `up` — the one-off container would put a second
+  inner daemon on the project's docker store and corrupt it. The
+  `shell` recipe refuses and points at `just attach`; the same refusal
+  covers a forgotten earlier `shell` session still holding the store.
+  The rule applies per flavor (a `shell test-dsh` next to an up'd
+  `test` is fine — disjoint stores).
 
 What persists across resets either way (volumes): source, build caches,
 inner docker images, OpenCode config/auth — and OpenCode's session
@@ -77,6 +80,58 @@ instead of re-primed from scratch. What only `up` preserves: the live
 process tree.
 
 Full command reference: [COMMANDS.md](COMMANDS.md).
+
+## Why did `docker logs` on my `just shell` session flood the terminal and eat Ctrl+C?
+
+The container's **main pty is your TUI**. `just shell` (compose `run`)
+attaches the interactive session to the container's main pty, and for
+`tty: true` containers the log store *is* that pty's output — every
+Bubble Tea frame the OpenCode TUI ever drew, including terminal
+mode-setters (alternate screen, mouse tracking, the kitty keyboard
+protocol push). `docker logs` replays it all into your terminal, which
+EXECUTES those sequences: the flood is the frames themselves (unbounded
+while a model streams), and the kitty push re-encodes your keystrokes —
+Ctrl+C becomes a `CSI …;5u` report, never the 0x03 byte that produces
+SIGINT, so the session looks hung and un-interruptable. Recovery from a
+second window: `reset` (or `stty sane`) on the wedged tty.
+
+`up`-mode containers log only the quiet supervisor stream (`[sandbox-init]`
+lines) — your TUI lives in tmux/`exec` ptys, which docker never logs.
+That's why `just logs` is guarded: it refuses to replay a live
+shell-mode session and tells you so. Raw `docker logs` bypasses the
+guard — now you know why not to.
+
+## How do I reach a port inside a sandbox from the Mac?
+
+Two layers, two gaps. Lima auto-forwards anything bound **in the VM** to
+macOS localhost, same number — that layer is zero-config. But a sandbox
+is a sysbox container with its **own network namespace**: dev servers
+(and inner-daemon `-p` publishes) bind one layer deeper, invisible to
+lima. Two deliberate ways to bridge it, mirroring the ecosystems' own
+split:
+
+- **Declarative window** (compose `ports:` style): `SANDBOX_PORTS=1` +
+  `PORT_BASE`/`PORT_BASE_END` in the project's `.sandbox.env`, covering
+  your app's contiguous dev ports. Identity mapping — sandbox port N
+  appears on Mac localhost:N — published on every `just up`. The `-dsh`
+  flavor gets its own window (`DSH_PORT_BASE`), so both flavors of one
+  dir coexist.
+- **Imperative relay** (`kubectl port-forward` style): `just expose
+  <name> [HOST:CONTAINER]` — one port, any port, works on live `shell`
+  sessions too; natural claim on the same number, loud conflict
+  otherwise. `just expose <name>` (no spec) lists what the sandbox is
+  listening on; `just unexpose` releases (`--all` = fleet reset).
+
+Why not fully automatic ("bind and it's reachable")? Two hard reasons:
+an eager wide publish breaks the moment two sandboxes run — which is
+the whole point of multi-flavor projects — and letting a sandbox expose
+*itself* would require giving the agent access to the outer docker
+daemon, a direct violation of the isolation model (sandboxes only ever
+talk to their private inner daemon). Even k8s's own answer for "reach
+my pod from the laptop" is a per-port forward command; `just expose` is
+that primitive.
+
+Full walkthrough: [RUNBOOK.md](RUNBOOK.md) → "Two network layers".
 
 ## Why one gateway route for every OpenCode Go model?
 

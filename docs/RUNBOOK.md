@@ -13,15 +13,47 @@ the layer faster than reading logs.
 - Lima auto-forwards only what binds **in the VM** (including ports the
   OUTER daemon publishes).
 - A dev server or INNER-daemon `-p` publish binds in the **sandbox's**
-  netns — invisible to lima. Enable the `ports:` block in
-  compose.sandbox.yaml, set a unique `PORT_BASE` per project, and run
-  `just up` (or `docker compose run --service-ports`).
+  netns — invisible to lima. Two ways to bridge it:
+  - **persistent window** (known, contiguous dev ports): set
+    `SANDBOX_PORTS=1` + `PORT_BASE`/`PORT_BASE_END` in the project's
+    `.sandbox.env` — the Justfile merges `sandbox/compose.ports.yaml` on
+    `just up`, publishing your window AS-IS (sandbox port N → Mac
+    localhost:N). The `-dsh` flavor replaces it with its own
+    (`DSH_PORT_BASE`), so both flavors of one dir coexist.
+  - **ad-hoc relay** (any port, any time, live `shell` sessions too):
+    `just expose <name> [HOST:CONTAINER]` — a throwaway socat relay on
+    the project's own network, targeting the compose service name (a
+    sandbox recreate is absorbed via DNS). `just expose <name>` (no
+    spec) lists what the sandbox is listening on; `just unexpose`
+    releases relays (`--all` = every relay on the VM).
 - Rule of thumb when a port doesn't appear on the Mac: figure out which of
   the two boxes it bound in. `limactl shell ai-box` + `ss -ltn` inside the
-  VM shows layer 2; from there it's the ports block or a binding address.
-- DSH is the exception with its own override: `just dsh-up` publishes
+  VM shows layer 2; relays show up as containers named
+  `<project>-expose-<port>` (label `ai-sandbox.relay`); from there it's
+  the window, a binding address, or an un-exposed port. Dev servers must
+  bind `0.0.0.0` inside the sandbox (`vite --host`) — loopback-only
+  listeners are invisible to any publish or relay.
+- DSH is its own case: `just up <p>-dsh` publishes
   `127.0.0.1:${DSH_PORT}:3080` on the VM, which lima forwards to macOS
   `localhost:${DSH_PORT}`.
+
+**Worked example — fullstack web app, both flavors up.** Project
+`webapp`, vite on sandbox :5173, API on :5174. In `webapp/.sandbox.env`:
+
+```bash
+SANDBOX_PORTS=1
+PORT_BASE=5173
+PORT_BASE_END=5199
+```
+
+`just up webapp` → Mac `http://localhost:5173` (vite) and `:5174` (API).
+`just up webapp-dsh` → the DSH flavor's dev servers appear inside
+`DSH_PORT_BASE..` instead (default 3200-3399) plus the DSH UI on
+`localhost:3080`. A port outside any window — say the agent starts a
+demo on :8080 — is one command: `just expose webapp 8080`. Two sandboxes
+claiming the same Mac port collide like host docker: loud
+"port already allocated" — re-window one or `expose` on another number
+(`just expose webapp-dsh 8081:8080`).
 
 ## Sandbox won't start: runc / "namespace" / "mount" errors
 
@@ -243,7 +275,7 @@ verify`.
    Mac `http://localhost:4000`:
 
    ```bash
-   just new probe ai-opencode && just shell probe
+   just new probe && just shell probe
    ```
 
    ```bash
@@ -358,7 +390,7 @@ Notes:
 
 ## DSH web UI: page loads, API calls fail
 
-- `just dsh-logs <project>`: confirm the printed URL/token and that DSH
+- `just logs <project>-dsh`: confirm the printed URL/token and that DSH
   started on the sandbox eth0 address.
 - In the DSH Models page, the custom provider must be
   `http://host.docker.internal:4000/deepseek/v1` with protocol
@@ -368,9 +400,10 @@ Notes:
 - If you open the UI via a different hostname/port, DSH's Host/Origin
   fence rejects it. Use `http://localhost:${DSH_PORT}`, or put the extra
   authority in `DSH_TRUSTED_HOSTS` in the project's `.sandbox.env`
-  (space-separated; `just dsh-stop` + `just dsh-up` after changing it).
-- If the page is unreachable on the Mac, check that `just dsh-up` (not
-  `just up`) is used, that `DSH_PORT` is unique, and that the VM's
+  (space-separated; `just clean <project>-dsh` + `just up <project>-dsh`
+  after changing it).
+- If the page is unreachable on the Mac, check that `just up <project>-dsh`
+  is used, that `DSH_PORT` is unique, and that the VM's
   `127.0.0.1:${DSH_PORT}` is listening (`ss -ltn` on the VM).
 
 ## "disk full" on the VM
@@ -387,8 +420,8 @@ du -sh /mnt/projects/*                              # source (should be small �
                                                     #  node_modules in the tree)
 ```
 
-Fixes: `just clean <stale-project>` (or `purge` if the project is dead;
-for a DSH project use `dsh-stop` / `dsh-purge`), `docker image prune` on
+Fixes: `just clean <stale-project>[-dsh]` (or `purge` if the project is
+dead), `docker image prune` on
 the VM. The build-cache redirect exists so
 `target/` and `node_modules` DON'T land in the Mac tree — if they do,
 some tool is bypassing the env (check `.cargo/config.toml` overrides or a
@@ -439,9 +472,9 @@ Reading a stuck boot (things the probe clock won't tell you):
 
 ## Escalation ladder (when something is deeply wedged)
 
-1. `just clean <p>` → retry `shell`
-2. `just purge <p>` → retry (drops inner images/caches/agent state);
-   for a DSH project use `just dsh-purge <p>` so dsh-home is included
+1. `just clean <p>[-dsh]` → retry `shell`
+2. `just purge <p>[-dsh]` → retry (drops inner images/caches/agent
+   state; the -dsh form also drops dsh-home)
 3. fallback runtime profile (see above) for *that project*
 4. `just vm-rebuild`
 5. `limactl delete -f ai-box && just vm-up && just build` (same as 4;

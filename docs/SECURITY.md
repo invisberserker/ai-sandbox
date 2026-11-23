@@ -86,7 +86,7 @@ lima forwards it to macOS `localhost`. The VM remains agent-less.
 - The real DeepSeek key is on the VM only; DSH holds the dummy.
 - The DSH UI is reachable by anything that can reach the Mac's localhost
   and by anyone with local access to the Mac. Protect the Mac account;
-  stop the container (`just dsh-stop`) when not in use.
+  stop the container (`just clean <p>-dsh`) when not in use.
 - DSH's `--trusted-host` fence accepts `localhost:${DSH_PORT}`; it does
   not add authentication by itself. If DSH prints a runtime token/URL,
   use it.

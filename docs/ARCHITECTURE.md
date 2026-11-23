@@ -217,9 +217,9 @@ purge <dead-project>` reclaims it.
 
 1. **`just shell <p>`** — new container each run: OS-level mutations
    (global packages, /etc, rogue cron) vanish; volumes persist.
-2. **`just purge <p>`** — also deletes the project's volumes (inner images,
-   caches, agent state). DSH projects use `just dsh-purge <p>` so the
-   `dsh-home` volume is included.
+2. **`just purge <p>[-dsh]`** — also deletes that flavor's volumes
+   (inner images, caches, agent state; the `-dsh` form includes the
+   `dsh-home` volume).
 3. **`just nuke` / `vm-rebuild`** — VM deleted; survivors are exactly the
    things that live on the Mac (source, secrets template). The rebuild is
    minutes because everything else is code.

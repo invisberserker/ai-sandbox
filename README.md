@@ -67,6 +67,13 @@ same `/deepseek` route the dsh flavor uses — pick a DeepSeek model in
 `/models` and the gateway swaps the dummy for your real key in transit
 (no second route, no key in the sandbox).
 
+**Flavors are per-invocation, not per-project**: the flavor is a suffix
+on the project name — `just up proj-alpha` runs the OpenCode sandbox,
+`just up proj-alpha-dsh` the DeepSeek Harness one, both mounting the
+same `~/ai-projects/proj-alpha` dir. They coexist as separate compose
+projects (disjoint containers, volumes, networks); `.sandbox.env` stays
+one flavor-agnostic file.
+
 The OpenCode flavor is also the base harness for third-party providers:
 use OpenCode's native provider catalog with direct BYOK, or add a
 gateway-isolated route if you care about that provider's key. The
@@ -93,12 +100,11 @@ $EDITOR ~/.ai-secrets/ai-gateway.env
 just seed-secrets
 
 # OpenCode TUI sandbox
-just new proj-alpha ai-opencode
-just shell proj-alpha
+just new proj-alpha
+just up proj-alpha            # then re-enter any day: just attach proj-alpha
 
-# DeepSeek Harness web UI sandbox
-just new dsh-proj ai-deepseek
-just dsh-up dsh-proj          # prints http://localhost:3080
+# DeepSeek Harness web UI — another flavor on the SAME project dir
+just up proj-alpha-dsh        # prints http://localhost:3080
 ```
 
 The VM is named `ai-box` by default. Prefer your own name? Name it at
@@ -123,23 +129,22 @@ agent-less in both cases.
 
 | Task | Command |
 | --- | --- |
-| Open a project for work (stays running) | `just up proj-alpha` |
-| Get back into it — same container, any day | `just attach proj-alpha` |
-| One-off task in a closed project | `just shell proj-alpha` |
-| Start a DSH web sandbox | `just dsh-up dsh-proj` |
-| Print a DSH URL | `just dsh-url dsh-proj` |
-| DSH logs (startup URL/token) | `just dsh-logs dsh-proj` |
-| Shell into a running DSH sandbox | `just attach dsh-proj` |
+| Open a project for work (stays running) | `just up proj-alpha` — opencode / `just up proj-alpha-dsh` — deepseek |
+| Get back into it — same container, any day | `just attach proj-alpha` (or `proj-alpha-dsh`) |
+| One-off task in a closed project | `just shell proj-alpha` (refused while that flavor is up) |
+| Print a sandbox's log (dsh URL/token) | `just logs proj-alpha-dsh` (add `-f` to follow live) |
+| Reach a sandbox port on the Mac | opt-in window (`SANDBOX_PORTS=1` in `.sandbox.env`) or `just expose proj-alpha 3000` |
+| See what's listening / release ports | `just expose proj-alpha` / `just unexpose proj-alpha` / `just unexpose --all` |
+| Print a DSH URL | `just dsh-url proj-alpha` |
 | Keepalive ping for the OpenCode Go plan | `just activate` |
-| New project | `just new <name> [image]` |
+| New project | `just new <name>` |
 | Refresh agent CLIs | `just bump-agents && just build` |
 | Update gateway keys | `just seed-secrets` |
 | Apply gateway route edits | `just gateway-reload` |
 | Health check | `just verify` / `just status` |
-| Reset one project | `just clean <name>` (keep data) / `just purge <name>` (wipe) |
-| Reset a DSH project | `just dsh-stop <name>` / `just dsh-purge <name>` |
+| Reset one flavor | `just clean <name>[-dsh]` (keep data) / `just purge <name>[-dsh]` (wipe) |
 | Rebuild the VM | `just vm-rebuild` |
-| Custom or second VM name | append it: `just shell proj-alpha my-box` — or set `VM_NAME` once in `.just.env` |
+| Custom or second VM name | append it: `just up proj-alpha my-box` — or set `VM_NAME` once in `.just.env` |
 
 The default working mode for real projects: `just up` once — the
 sandbox is a dev machine that stays powered on — `tmux` inside so the
@@ -178,12 +183,13 @@ vm/ai-box.yaml           the Lima VM manifest (VM pins: sysbox, caddy, registry)
 images/Dockerfile        layered flavors: base→node-core→toolchains→{whiteboard,opencode,deepseek}
 images/docker-bake.hcl   every image pin, one file
 images/rootfs/           baked OpenCode config, DSH web profile, dsh-web launcher
-sandbox/compose.sandbox.yaml per-project sandbox template
-sandbox/compose.dsh.yaml     DSH port + dsh-home override (`just dsh-up`)
+sandbox/compose.sandbox.yaml per-project sandbox template (one file, every project & flavor)
+sandbox/compose.ports.yaml   opt-in dev-server window (SANDBOX_PORTS=1 in .sandbox.env)
+sandbox/compose.dsh.yaml     dsh override for -dsh projects: DSH port, dsh-home, its own window (!override)
 sandbox/*.env.example        templates: .sandbox.env (knobs), .ai.env (container env)
 gateway/Caddyfile        protocol-blind credential gateway (OpenCode Go + DeepSeek)
 scripts/bump.sh          refresh version pins from upstream
-scripts/verify.sh        smoke tests (run inside the VM)
+scripts/verify.sh        smoke tests: VM, images, sandbox semantics, two-flavor concurrency
 scripts/seed-secrets.sh  install gateway keys from the Mac
 scripts/go-keepalive.sh  the OpenCode Go keepalive curl (run by `just activate`)
 docs/                    ARCHITECTURE / BOOTSTRAP / COMMANDS / UPDATES / SECURITY / RUNBOOK / AGENT-CONFIG / FAQ / ARCHIVE / OPENAI-PLUS

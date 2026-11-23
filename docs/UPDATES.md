@@ -26,7 +26,8 @@ just verify
 
 Running sandboxes keep their old image until restarted — the running
 container is immutable. A fresh `just shell <p>` (or `clean` + `up`) picks
-up the new `:latest`; for DSH use `dsh-stop` + `dsh-up`.
+up the new `:latest`; for the DeepSeek flavor: `clean <p>-dsh` +
+`up <p>-dsh`.
 
 Notes:
 
@@ -39,8 +40,9 @@ Notes:
 - `PYTHON_VERSION` is **not** auto-bumped — a minor bump changes
   interpreter semantics; do it by hand in `docker-bake.hcl`.
 - Want to pin a project to a known-good day? Its `.sandbox.env`:
-  `SANDBOX_IMAGE=ai-opencode:20261120` — `just build` stamps date
-  tags alongside `:latest` on every run.
+  `IMAGE_TAG=20261120` — `just build` stamps date tags alongside
+  `:latest` on every run, and the pin applies to every flavor of the
+  project (they are built together).
 
 ## 2. Refresh toolchains (monthly-ish)
 

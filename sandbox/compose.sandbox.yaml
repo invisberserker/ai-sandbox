@@ -15,7 +15,12 @@
 # `just new` writes one). Passed via --env-file, so a repo's own `.env`
 # — the standard dotenv file your app reads — is never consulted by the
 # sandbox tooling. Named volumes are namespaced by the project name, so
-# this SAME file serves every project unchanged.
+# this SAME file serves every project unchanged — and every FLAVOR: the
+# Justfile passes --project-name <dir>[-dsh], so the opencode and dsh
+# sandboxes of one dir coexist as separate compose projects (disjoint
+# containers/volumes/networks) over the same /workspace bind. The flavor
+# suffix also selects the image (via the SANDBOX_IMAGE env the Justfile
+# exports; OS env beats --env-file).
 #
 # ISOLATION MODEL (docs/SECURITY.md): runtime sysbox-runc makes this a
 # "system container" — the agent is root INSIDE (apt install works, /etc is
@@ -129,7 +134,10 @@ services:
       # in the ephemerality ladder below), so images the agent pulled
       # (postgres, redis, ...) stay cached for the project. ONE daemon at
       # a time: `just shell <p>` while the project is `up` puts a second
-      # inner dockerd on this store and corrupts it — use `just attach`.
+      # inner dockerd on this store and corrupts it — use `just attach`
+      # (the Justfile's shell guard refuses the mistake; the rule applies
+      # per flavor AND to two concurrent `shell` sessions of one flavor —
+      # the guard names the container holding the store).
       - type: volume
         source: inner-docker-data
         target: /var/lib/docker
@@ -156,16 +164,13 @@ services:
         source: vscode-server
         target: /root/.vscode-server
 
-    # ---- OPTIONAL: expose sandbox ports to macOS ------------------------------
-    # Ports bound by the INNER docker daemon or a dev server live in THIS
-    # sandbox's network namespace — lima's auto-forward cannot see them
-    # (docs/RUNBOOK.md → "Two network layers"). Uncomment to map a slice of
-    # the sandbox's port space onto the VM (lima then forwards to macOS
-    # localhost). Give every project its own PORT_BASE in .sandbox.env
-    # (e.g. proj-a 3000, proj-b 3200) to avoid VM-level collisions.
-    # Applies to `just up`; for `docker compose run` add --service-ports.
-    # ports:
-    #   - "${PORT_BASE:-3000}-${PORT_BASE_END:-3199}:3000-3199"
+    # ---- Expose sandbox ports to macOS: MOVED ----------------------------------
+    # The per-project dev-server window lives in compose.ports.yaml, which
+    # the Justfile merges only when .sandbox.env sets SANDBOX_PORTS=1 (+
+    # a PORT_BASE window). Identity mapping: sandbox port N appears on
+    # macOS localhost:N; `just up` only. One-off ports anytime:
+    #   just expose <name> <port>
+    # Details: docs/RUNBOOK.md → "Two network layers", docs/COMMANDS.md.
 
     # ---- OPTIONAL: git push auth via the Mac's ssh-agent ----------------------
     # Default posture: sandboxes COMMIT locally; you PUSH from the Mac.
@@ -192,12 +197,12 @@ volumes:
 
 # =============================================================================
 # EPHEMERALITY LADDER (three reset tiers)
-#   1. just shell <p>            — fresh container OS every run: global
+#   1. just shell <p>[-dsh]      — fresh container OS every run: global
 #      packages, /etc edits, rogue cronjobs all vanish; source, caches,
 #      inner images, OpenCode config and dsh state persist on volumes.
-#   2. just purge <p>            — also wipes this project's volumes (inner
-#      images, build caches, agent state). For a dsh project use
-#      `just dsh-purge <p>` so the dsh-home volume is included.
+#   2. just purge <p>[-dsh]      — also wipes that flavor's volumes (inner
+#      images, build caches, agent state; the -dsh form includes
+#      dsh-home).
 #   3. just nuke                 — deletes the entire VM. Survivors: source and
 #      secrets (~/.ai-secrets) on the Mac. Volumes die with the VM.
 # =============================================================================
@@ -205,10 +210,11 @@ volumes:
 # =============================================================================
 # DSH (DeepSeek Harness) OVERRIDE
 #   The dsh flavor runs the DSH web UI inside this sandbox. Use
-#   `just dsh-up <project>`; it merges sandbox/compose.dsh.yaml, which
-#   publishes 127.0.0.1:${DSH_PORT}:3080 and mounts the dsh-home volume.
-#   Open http://localhost:${DSH_PORT} on macOS. Other flavors use the
-#   normal `just up`/`just shell`.
+#   `just up <project>-dsh`; the Justfile merges sandbox/compose.dsh.yaml
+#   LAST, which publishes 127.0.0.1:${DSH_PORT}:3080 (plus the dsh flavor's
+#   own dev-server window via `ports: !override`) and mounts the dsh-home
+#   volume. Open http://localhost:${DSH_PORT} on macOS. Other flavors use
+#   the plain project name (`just up <project>` / `just shell <project>`).
 # =============================================================================
 #
 # =============================================================================

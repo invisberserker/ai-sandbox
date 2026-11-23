@@ -1,0 +1,33 @@
+# =============================================================================
+# Per-project dev-server window — merged by the Justfile's compose wrapper
+# ONLY when the project's .sandbox.env sets SANDBOX_PORTS=1 (default off).
+# =============================================================================
+# IDENTITY mapping: sandbox port N appears on macOS localhost:N for every
+# N in the window (published on the VM's 127.0.0.1; lima forwards VM ports
+# to the Mac as-is, same number). Set the window to cover YOUR app's
+# ports, e.g. a vite app on :5173 → PORT_BASE=5173 PORT_BASE_END=5199.
+#
+# Collisions behave like host docker: a second sandbox claiming an
+# overlapping window fails loudly at `up` ("port already allocated") —
+# re-window one project or expose single ports ad hoc instead:
+#   just expose <name> 3000
+#
+# Scope notes:
+#   - applies to `just up` only (`compose run`/`shell` doesn't publish);
+#   - dev servers must bind 0.0.0.0 INSIDE the sandbox (`vite --host`) —
+#     the publish DNATs to the sandbox's bridge IP, so loopback-only
+#     listeners are invisible;
+#   - INNER-daemon `-p` publishes ride the same window via the same
+#     VM-side publish (that's the range's point: postgres et al.);
+#   - ports in the window with no listener just refuse connections.
+#
+# The -dsh flavor REPLACES this window with its own (DSH_PORT_BASE in
+# .sandbox.env) via the `ports: !override` list in compose.dsh.yaml —
+# merged AFTER this file — so the two flavors of one project never
+# collide. Windows are per-FLAVOR constants; only concurrent PROJECTS
+# need distinct values.
+# =============================================================================
+services:
+  agent:
+    ports:
+      - "127.0.0.1:${PORT_BASE:-3000}-${PORT_BASE_END:-3199}:${PORT_BASE:-3000}-${PORT_BASE_END:-3199}"

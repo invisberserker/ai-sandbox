@@ -196,13 +196,14 @@ through a published port.
 ### Start it
 
 ```bash
-just new dsh-proj ai-deepseek
-just dsh-up dsh-proj
+just new dsh-proj
+just up dsh-proj-dsh
 # prints http://localhost:3080
 ```
 
 Open that URL in a browser on the Mac. DSH may print a runtime URL/token
-in the startup logs; `just dsh-logs dsh-proj` shows it if you need it.
+in the startup logs; `just logs dsh-proj-dsh` shows it if you need it —
+that is also where the first-auth `/deepseek?token=…` link lives.
 
 The container command is `/usr/local/bin/dsh-web`, which binds the DSH web
 server to the sandbox's eth0 address on port 3080, trusts
@@ -216,11 +217,11 @@ Each concurrent DSH project needs its own `DSH_PORT` in its
 Useful commands:
 
 ```bash
-just dsh-url dsh-proj      # print the macOS URL
-just dsh-logs dsh-proj     # follow startup logs (URL/token)
-just attach dsh-proj       # shell inside the running sandbox
-just dsh-stop dsh-proj     # stop/remove container; dsh-home volume kept
-just dsh-purge dsh-proj    # also wipe dsh-home + inner images/caches
+just dsh-url dsh-proj        # print the plain macOS URL
+just logs dsh-proj-dsh       # startup log (URL/token; add -f to follow)
+just attach dsh-proj-dsh     # shell inside the running sandbox
+just clean dsh-proj-dsh      # stop/remove container; dsh-home volume kept
+just purge dsh-proj-dsh      # also wipe dsh-home + inner images/caches
 ```
 
 ### Provider wiring
@@ -303,7 +304,8 @@ dummy `OPENCODE_API_KEY`.
 - **404/502** — path/base-URL drift or upstream unreachable. Check the
   sandbox base URL against the route table: the native path after the route
   prefix must be exactly what the harness normally sends.
-- **DSH page loads but API calls fail** — check `just dsh-logs`; confirm the
+- **DSH page loads but API calls fail** — check `just logs <p>-dsh`;
+  confirm the
   provider base URL is `/deepseek/v1` and `DEEPSEEK_API_KEY` is the dummy.
 - **DSH rejects the Host header** — the launcher trusts
   `localhost:${DSH_PORT}`; if you open a different hostname/port, add a

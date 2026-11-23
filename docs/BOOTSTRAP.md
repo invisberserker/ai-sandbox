@@ -103,7 +103,7 @@ First touch — a one-off session to sanity-check the machinery:
 
 ```bash
 cd ~/ai-projects/ai-sandbox
-just new proj-alpha ai-opencode
+just new proj-alpha
 just shell proj-alpha
 ```
 
@@ -150,8 +150,8 @@ already `up` — see [COMMANDS.md](COMMANDS.md).)
 ### DeepSeek Harness web UI
 
 ```bash
-just new dsh-proj ai-deepseek
-just dsh-up dsh-proj     # prints http://localhost:3080
+just new dsh-proj
+just up dsh-proj-dsh      # prints http://localhost:3080
 ```
 
 Open the URL in a macOS browser. The UI runs inside the sysbox sandbox;
@@ -235,8 +235,8 @@ echo 'Include ~/.lima/*/ssh.config' >> ~/.ssh/config
 docker context create ai-box --docker "host=ssh://lima-ai-box"
 ```
 
-Per project (sandbox must be RUNNING for attach — use `up`, or `dsh-up`
-for a DSH project):
+Per project (sandbox must be RUNNING for attach — use `up`, with the
+`-dsh` suffix for the DeepSeek flavor):
 
 ```bash
 just up proj-alpha          # sandbox runs in the background
@@ -263,7 +263,6 @@ Notes:
 - Weekly: `just bump-agents && just build && just verify`
 - Something's off: `just verify`, then [RUNBOOK.md](RUNBOOK.md)
 - Every verb on one page: [COMMANDS.md](COMMANDS.md)
-- Reset a project: `just clean <p>` / `just purge <p>`
-- Reset a DSH project: `just dsh-stop <p>` / `just dsh-purge <p>`
+- Reset one flavor: `just clean <p>[-dsh]` / `just purge <p>[-dsh]`
 - Nuke & pave the VM: `just vm-rebuild`
 - Change VM size: set `cpus`/`memory`/`disk` in `.lima.env`, then `just vm-rebuild`
