@@ -256,10 +256,101 @@ verify name=vm_name:
 
 # ─── projects / sandboxes ─────────────────────────────────────────────────────
 
-# Writes one file only (safe on an existing checkout). NAME must start
-# with a letter or digit, use only lowercase/digits/-/_, and must not end
-# in a reserved flavor suffix (-dsh / -clean) — flavors are chosen per
-# invocation, not by this file.
+# ls [VM] — tree of ~/ai-projects: projects, used flavors, live sandboxes.
+[group('projects')]
+ls vm=vm_name:
+    #!/bin/bash
+    set -euo pipefail
+    root="$HOME/ai-projects"
+    [ -d "$root" ] || { echo "no ~/ai-projects yet (create one: just new <name>)"; exit 0; }
+
+    # One VM roundtrip: running container names + volume names. A flavor
+    # counts as USED when its inner-docker-data volume exists — both
+    # `just shell` and `just up` create it, `clean` keeps it, only
+    # `purge` removes it. Live mode comes from the container name:
+    # <flavor>-agent-1 = up; <flavor>-agent-run-<hash> = one-off shell.
+    vm_ok=0; vm_out=""
+    if vm_out="$(limactl shell {{vm}} -- bash -lc '
+        echo "==ps=="
+        docker ps | tail -n +2 | awk "{print \$NF}"
+        echo "==vol=="
+        docker volume ls -q
+      ' 2>/dev/null)"; then vm_ok=1; fi
+    running=""; volumes=""
+    if [ "$vm_ok" = 1 ]; then
+        running="$(printf '%s\n' "$vm_out" | sed -n '/^==ps==$/,/^==vol==$/p' | sed '1d;$d')"
+        volumes="$(printf '%s\n' "$vm_out" | sed -n '/^==vol==$/,$p' | sed '1d')"
+    fi
+    have() { printf '%s\n' "$1" | grep -qxF -- "$2" 2>/dev/null; }
+
+    if [ -t 1 ]; then
+        gc=$'\033[32m'; yc=$'\033[36m'; dc=$'\033[2m'; rc=$'\033[0m'
+    else gc=""; yc=""; dc=""; rc=""; fi
+
+    dirs="$(find -L "$root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | LC_ALL=C sort)"
+    if [ -z "$dirs" ]; then
+        echo "~/ai-projects is empty (create one: just new <name>)"
+        exit 0
+    fi
+    n="$(printf '%s\n' "$dirs" | wc -l | tr -d ' ')"
+    echo "~/ai-projects — ${n} project$( [ "$n" = 1 ] || echo s )"
+    if [ "$vm_ok" != 1 ]; then
+        echo "${dc}VM '{{vm}}' is not running — flavors/states unknown (just vm-up)${rc}"
+    fi
+    echo
+
+    last="$(printf '%s\n' "$dirs" | tail -1)"
+    printf '%s\n' "$dirs" | while IFS= read -r d; do
+        name="${d##*/}"
+        if [ "$d" = "$last" ]; then g1="└─"; cbar="   "; else g1="├─"; cbar="│  "; fi
+        mark=""
+        [ "$d" = "{{repo_dir}}" ] && mark="  ${dc}(this repo)${rc}"
+        printf '%s %s%s\n' "$g1" "$name" "$mark"
+        if [ ! -f "$d/.sandbox.env" ]; then
+            printf '%s%s\n' "$cbar" "${dc}no .sandbox.env — just new ${name}${rc}"
+            continue
+        fi
+        if [ "$vm_ok" != 1 ]; then continue; fi
+        used=0
+        for f in "" "-dsh" "-clean"; do
+            case "$f" in
+                "")     label="opencode" ;;
+                "-dsh") label="dsh" ;;
+                *)      label="clean" ;;
+            esac
+            fname="${name}${f}"
+            have "$volumes" "${fname}_inner-docker-data" || continue
+            used=1
+            state="stopped"; glyph="${dc}○${rc}"; hint="just up ${fname}"
+            if printf '%s\n' "$running" | grep -qxF -- "${fname}-agent-1" 2>/dev/null; then
+                state="up"; glyph="${gc}●${rc}"; hint="just attach ${fname}"
+            elif printf '%s\n' "$running" | grep -qE -- "^${fname}-agent-run-" 2>/dev/null; then
+                state="shell"; glyph="${yc}◐${rc}"; hint="one-off session"
+            fi
+            extra=""
+            if [ "$f" = "-dsh" ]; then
+                port="$(sed -n 's/^DSH_PORT=//p' "$d/.sandbox.env" 2>/dev/null | tail -1 \
+                    | sed 's/[[:space:]]*#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//')"
+                extra="  http://localhost:${port:-3080}"
+            fi
+            relays="$(printf '%s\n' "$running" | grep -E -- "^${fname}-expose-[0-9]+$" 2>/dev/null \
+                | sed 's/.*-expose-//' | sort -n | sed 's/^/:/' | tr '\n' ' ' | sed 's/ *$//' || true)"
+            [ -n "$relays" ] && extra="${extra}    relays ${relays}"
+            # tree glyph: └─ on the flavor used last within this project
+            later=""
+            case "$f" in
+                "")    for g in -dsh -clean; do have "$volumes" "${name}${g}_inner-docker-data" && later=1; done ;;
+                "-dsh") have "$volumes" "${name}-clean_inner-docker-data" && later=1 ;;
+            esac
+            if [ -n "$later" ]; then cg="├─"; else cg="└─"; fi
+            printf '%s%s %-10s %s %-7s  %s%s\n' "$cbar" "${cg}" "$label" "$glyph" "$state" "$hint" "$extra"
+        done
+        if [ "$used" = 0 ]; then
+            printf '%s%s\n' "$cbar" "${dc}no sandboxes yet — just up ${name}${rc}"
+        fi
+    done
+    echo
+    printf '%s\n' "${dc}● up   ◐ one-off shell   ○ stopped (volumes kept)${rc}"
 
 # new NAME — scaffold ~/ai-projects/NAME for any flavor suffix.
 [group('projects')]

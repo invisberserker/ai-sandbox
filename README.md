@@ -131,6 +131,7 @@ agent-less in both cases.
 
 | Task | Command |
 | --- | --- |
+| See what projects and sandboxes exist | `just ls` (tree: projects, used flavors, live states) |
 | Open a project for work (stays running) | `just up proj-alpha` — opencode / `just up proj-alpha-dsh` — deepseek |
 | Get back into it — same container, any day | `just attach proj-alpha` (or `proj-alpha-dsh`) |
 | One-off task in a closed project | `just shell proj-alpha` (refused while that flavor is up) |
