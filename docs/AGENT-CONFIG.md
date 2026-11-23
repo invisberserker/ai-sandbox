@@ -35,15 +35,15 @@ containers instead — `ip -4 addr show dev docker0` on the VM (it is not
 always 172.17.0.1; the daemon allocates the default bridge wherever it
 fits).
 
-## Flavor: opencode (`ai-opencode`)
+## Flavor: opencode (`ai-opencode`, bare project name)
 
-Default provider: **OpenCode Go**, via the gateway. **DeepSeek
-official** is wired through the same pattern (see
-[DeepSeek official via the gateway](#deepseek-official-via-the-gateway)
-below). The image installs OpenCode **v2** (`@opencode/cli` on npm) and
-the baked config uses the **v2 schema** — `providers`, plural, with
-`settings.baseURL`. The v1 format (singular `provider` + `options.*`) is
-silently ignored by v2, so don't paste old configs:
+Baked default model: **DeepSeek Flash** (DeepSeek official via the
+gateway). **OpenCode Go** is wired through the same pattern; pick either
+provider in `/models`. The image installs OpenCode **v2**
+(`@opencode/cli` on npm) and the baked config uses the **v2 schema** —
+`providers`, plural, with `settings.baseURL`. The v1 format (singular
+`provider` + `options.*`) is silently ignored by v2, so don't paste old
+configs:
 
 ```json
 {
@@ -60,7 +60,7 @@ silently ignored by v2, so don't paste old configs:
       }
     }
   },
-  "model": "opencode-go/kimi-k3"
+  "model": "deepseek/deepseek-flash"
 }
 ```
 
@@ -187,7 +187,7 @@ provider config with the real key. The key then lives in the sandbox's
 trade-off: maximum harness compatibility, no key isolation. Use it only for
 keys you are willing to expose to a prompt-injected agent.
 
-## Flavor: deepseek (`ai-deepseek`)
+## Flavor: deepseek (`ai-deepseek`, `-dsh` suffix)
 
 This is the DeepSeek Harness (`dsh`) **web UI**, running inside a sysbox
 sandbox. The VM stays agent-less; the browser on macOS reaches the sandbox
@@ -212,7 +212,10 @@ The compose override publishes `127.0.0.1:${DSH_PORT}:3080` on the VM;
 lima forwards it to the Mac.
 
 Each concurrent DSH project needs its own `DSH_PORT` in its
-`.sandbox.env` (3080, 3081, 3082, ...). Other flavors ignore it.
+`.sandbox.env` (3080, 3081, 3082, ...). The DSH UI port is always
+published; the dev-server window (`DSH_PORT_BASE`) is opt-in with
+`SANDBOX_PORTS=1` and needs its own range per concurrent DSH project.
+Other flavors ignore both.
 
 Useful commands:
 
@@ -272,11 +275,17 @@ DSH is meant to run in the sandbox. Running it on macOS directly would
 bypass the sysbox boundary; the gateway would still protect the DeepSeek
 key, but the agent would have macOS filesystem access. Use the flavor.
 
-## Flavor: whiteboard (`ai-whiteboard`)
+## Flavor: whiteboard (`ai-whiteboard`, `-clean` suffix)
 
 No agent baked in — a clean slate. It has the full toolchains, the inner
-Docker daemon, and the dummy gateway env vars. For an ad-hoc
-OpenAI-compatible tool:
+Docker daemon, and the dummy gateway env vars:
+
+```bash
+just new tools-proj
+just up tools-proj-clean
+```
+
+For an ad-hoc OpenAI-compatible tool:
 
 ```bash
 export OPENAI_BASE_URL=http://host.docker.internal:4000/deepseek/v1
@@ -305,8 +314,8 @@ dummy `OPENCODE_API_KEY`.
   sandbox base URL against the route table: the native path after the route
   prefix must be exactly what the harness normally sends.
 - **DSH page loads but API calls fail** — check `just logs <p>-dsh`;
-  confirm the
-  provider base URL is `/deepseek/v1` and `DEEPSEEK_API_KEY` is the dummy.
+  confirm the provider base URL is `/deepseek/v1` and `DEEPSEEK_API_KEY`
+  is the dummy.
 - **DSH rejects the Host header** — the launcher trusts
   `localhost:${DSH_PORT}`; if you open a different hostname/port, add a
   `DSH_TRUSTED_HOSTS` env or adjust `compose.dsh.yaml`.

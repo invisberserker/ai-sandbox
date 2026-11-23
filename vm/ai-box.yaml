@@ -6,7 +6,7 @@
 #   host the credential gateway (real API keys live only here, root-only),
 #   host a pull-through registry mirror (N sandboxes pulling the same image
 #   costs one network pull). No project code, no toolchains. The VM is
-#   cattle: keepable state lives on the Mac or in per-project volumes;
+#   cattle: keepable state lives on the Mac or in per-flavor volumes;
 #   `just vm-rebuild` recreates it in minutes.
 #
 # USAGE
@@ -24,7 +24,7 @@
 #   cpus: a ceiling, idle cost ≈ zero. memory: guest-pinned, host RAM
 #   fills only as used. disk: sparse, grows with guest writes
 #   (host usage: du -sh ~/.lima/ai-box/). All three are creation-time.
-#   120GiB fits ~8-10 active projects (OS 8G + images + per-project
+#   120GiB fits ~8-10 active project-flavors (OS 8G + images + per-flavor
 #   inner volumes + caches). Exclude ~/.lima/ from Time Machine — the VM
 #   is cattle, backing it up is churn, not safety.
 # =============================================================================
@@ -91,8 +91,9 @@ networkOpts:
 # the Mac's 127.0.0.1. Ports bound only to a specific interface (eth0,
 # docker0) are not forwarded.
 # ⚠ Ports published by a sandbox's INNER docker daemon are invisible to
-#   this rule — they need the ports: block in compose.sandbox.yaml
-#   (docs/RUNBOOK.md → "Two network layers").
+#   this rule — bridge them with the opt-in project window
+#   (SANDBOX_PORTS=1, sandbox/compose.ports.yaml) or an ad-hoc relay
+#   (`just expose`); docs/RUNBOOK.md → "Two network layers".
 portForwards:
   - guestIP: "0.0.0.0"
     guestPortRange: [1024, 65535]

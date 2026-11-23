@@ -1,7 +1,7 @@
 # ai-sandbox
 
 Ephemeral, disposable coding environments for AI agents — one clean Lima VM
-on your Mac, Docker inside it, and per-project sysbox containers where
+on your Mac, Docker inside it, and per-flavor sysbox containers where
 agents run wild without touching anything that matters.
 
 ```
@@ -34,7 +34,7 @@ agents run wild without touching anything that matters.
   namespace, and maps to an unprivileged UID on the VM. No
   `privileged: true` anywhere. The VM itself stays agent-less.
 - **Ephemeral by tier** — fresh container OS every `just shell`; source,
-  build caches and inner images persist in per-project volumes; the whole
+  build caches and inner images persist in per-flavor volumes; the whole
   VM is reproducible from one YAML.
 - **Keys never enter a sandbox** — for gateway-routed providers, agents
   hold format-valid dummy keys; a protocol-blind gateway on the VM swaps
@@ -55,22 +55,24 @@ Three image flavors, **identical toolchains** (node/typescript, rust,
 python, go + the usual utils: jq, tmux, ripgrep, fd, fzf, bat, git, inner
 docker) — two carry an agent CLI, one carries none:
 
-| Flavor | Agent | Default provider (via gateway) |
-| --- | --- | --- |
-| `ai-opencode` | OpenCode TUI | OpenCode Go subscription (+ DeepSeek official override) |
-| `ai-deepseek` | DeepSeek Harness (dsh) web UI | DeepSeek official API |
-| `ai-whiteboard` | — none — | any, ad-hoc (npx/uv/curl whatever the task needs) |
+| Flavor | Suffix | Agent | Default provider (via gateway) |
+| --- | --- | --- | --- |
+| `ai-opencode` | — | OpenCode TUI | DeepSeek official (baked default); OpenCode Go available |
+| `ai-deepseek` | `-dsh` | DeepSeek Harness (dsh) web UI | DeepSeek official API |
+| `ai-whiteboard` | `-clean` | — none — | any, ad-hoc (npx/uv/curl whatever the task needs) |
 
-DeepSeek official is wired into the OpenCode flavor the same way: the
-baked config endpoint-overrides the catalog `deepseek` provider onto the
-same `/deepseek` route the dsh flavor uses — pick a DeepSeek model in
-`/models` and the gateway swaps the dummy for your real key in transit
-(no second route, no key in the sandbox).
+DeepSeek official is the baked default for `ai-opencode`: the config
+endpoint-overrides the catalog `deepseek` provider onto the same
+`/deepseek` route the dsh flavor uses. OpenCode Go is wired the same way
+via `/opencode-go`; pick either in `/models`, and the gateway swaps the
+dummy for your real key in transit (no second route, no key in the
+sandbox).
 
 **Flavors are per-invocation, not per-project**: the flavor is a suffix
 on the project name — `just up proj-alpha` runs the OpenCode sandbox,
-`just up proj-alpha-dsh` the DeepSeek Harness one, both mounting the
-same `~/ai-projects/proj-alpha` dir. They coexist as separate compose
+`just up proj-alpha-dsh` the DeepSeek Harness one, `just up
+proj-alpha-clean` the agent-free whiteboard one, all mounting the same
+`~/ai-projects/proj-alpha` dir. They coexist as separate compose
 projects (disjoint containers, volumes, networks); `.sandbox.env` stays
 one flavor-agnostic file.
 
@@ -89,7 +91,7 @@ cp -R <this-repo> ~/ai-projects/ai-sandbox
 
 just vm-up                    # create + provision the VM (first run ~5 min)
 just build                    # build base + whiteboard/opencode/deepseek
-just verify                   # smoke tests: VM, images, one sandbox boot
+just verify                   # smoke tests: VM, images, sandbox semantics, concurrency
 
 # wire up your OpenCode Go + DeepSeek official keys
 mkdir -p ~/.ai-secrets && chmod 700 ~/.ai-secrets
@@ -142,7 +144,7 @@ agent-less in both cases.
 | Update gateway keys | `just seed-secrets` |
 | Apply gateway route edits | `just gateway-reload` |
 | Health check | `just verify` / `just status` |
-| Reset one flavor | `just clean <name>[-dsh]` (keep data) / `just purge <name>[-dsh]` (wipe) |
+| Reset one flavor | `just clean <name>[-dsh|-clean]` (keep data) / `just purge <name>[-dsh|-clean]` (wipe) |
 | Rebuild the VM | `just vm-rebuild` |
 | Custom or second VM name | append it: `just up proj-alpha my-box` — or set `VM_NAME` once in `.just.env` |
 
@@ -165,9 +167,10 @@ look similar — is documented in the command reference:
 - **OpenCode is a TUI** — run it natively over ssh + tmux. That is its
   intended form.
 - **Web UIs just work** — anything the agent serves on a port (vite,
-  storybook, API docs) reaches your Mac's localhost via the port
-  passthrough (enable the `ports:` block in compose.sandbox.yaml and use
-  `just up`; see docs/RUNBOOK.md → "Two network layers").
+  storybook, API docs) reaches your Mac's localhost via the opt-in window
+  (`SANDBOX_PORTS=1` + `PORT_BASE`/`PORT_BASE_END` in the project's
+  `.sandbox.env`, merged by `just up`) or `just expose <name> <port>`.
+  See docs/RUNBOOK.md → "Two network layers".
 - **IDE / agent-GUI** — VS Code or Cursor on the Mac **attaches into the
   running sandbox container** (Dev Containers → Attach to Running
   Container, over a docker context pointing at the VM). IDE extensions
@@ -185,7 +188,8 @@ images/docker-bake.hcl   every image pin, one file
 images/rootfs/           baked OpenCode config, DSH web profile, dsh-web launcher
 sandbox/compose.sandbox.yaml per-project sandbox template (one file, every project & flavor)
 sandbox/compose.ports.yaml   opt-in dev-server window (SANDBOX_PORTS=1 in .sandbox.env)
-sandbox/compose.dsh.yaml     dsh override for -dsh projects: DSH port, dsh-home, its own window (!override)
+sandbox/compose.dsh.yaml     dsh override: DSH UI port + dsh-home volume
+sandbox/compose.dsh.ports.yaml  opt-in dsh dev window (same SANDBOX_PORTS switch)
 sandbox/*.env.example        templates: .sandbox.env (knobs), .ai.env (container env)
 gateway/Caddyfile        protocol-blind credential gateway (OpenCode Go + DeepSeek)
 scripts/bump.sh          refresh version pins from upstream

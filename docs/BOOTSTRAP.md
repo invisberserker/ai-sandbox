@@ -38,10 +38,11 @@ just vm-up
 ```
 
 This runs `limactl start --name=ai-box vm/ai-box.yaml`: downloads the
-Ubuntu 24.04 arm64 cloud image, boots it under vz, and runs the six
+Ubuntu 24.04 arm64 cloud image, boots it under vz, and runs the seven
 provisioning steps (packages → kernel pin → docker-ce → sysbox → registry
-mirror → credential gateway). Lima blocks until the probes pass — a failed
-probe is a loud failure at boot, not a mystery later. First run: ~5 min.
+mirror → credential gateway → VM DNS resolver). Lima blocks until the
+probes pass — a failed probe is a loud failure at boot, not a mystery
+later. First run: ~5 min.
 
 Want the VM under a different name? `just vm-up my-box` — then keep
 passing it (`just build my-box`, `just shell proj-a my-box`), or make
@@ -66,10 +67,11 @@ just build             # base + the three flavors: whiteboard, opencode, deepsee
 just verify            # full smoke test — everything below should PASS
 ```
 
-`verify` checks the VM services, both agent CLIs (OpenCode + dsh), the
-shared toolchains (node/tsc, rust, go, python-via-uv), the gateway routes,
-and boots one real sysbox sandbox to prove the inner dockerd + isolation
-semantics.
+`verify` checks the VM services, all three images (OpenCode, dsh, and the
+agent-free whiteboard), the shared toolchains (node/tsc, rust, go,
+python-via-uv), the gateway routes, boots one real sysbox sandbox to prove
+the inner dockerd + isolation semantics, then runs both flavors of one dir
+concurrently to prove the suffix model.
 
 ## 4. Secrets (do once)
 
@@ -144,8 +146,8 @@ images, OpenCode config/auth, and its session history under
 from the TUI instead of re-primed from scratch. `just shell` remains
 the one-off verb: a short, well-defined task in a closed project — a
 quick edit, an inspection, asking an agent for a dad joke — fresh
-container in, gone at exit. (Never `shell` into a project that's
-already `up` — see [COMMANDS.md](COMMANDS.md).)
+container in, gone at exit. (Never `shell` into a flavor that's already
+`up` — the recipe refuses; see [COMMANDS.md](COMMANDS.md).)
 
 ### DeepSeek Harness web UI
 
@@ -157,6 +159,17 @@ just up dsh-proj-dsh      # prints http://localhost:3080
 Open the URL in a macOS browser. The UI runs inside the sysbox sandbox;
 the VM stays agent-less. See [AGENT-CONFIG.md](AGENT-CONFIG.md) for the
 DSH model wiring and per-project `DSH_PORT` planning.
+
+### Whiteboard (no agent CLI)
+
+```bash
+just new tools-proj
+just up tools-proj-clean   # ai-whiteboard: toolchains + inner docker, no agent
+```
+
+Use this for ad-hoc commands (`npx`, `uv tool run`, `curl`, a custom
+install) without a baked agent. It has the same full toolchain set as the
+two agent flavors.
 
 ## 6. Wiring a real repo
 
@@ -199,15 +212,26 @@ then `just new my-app` as above.
 
 ## 7. Ports to the Mac (web UIs, dev servers) — when you need them
 
-Uncomment the `ports:` block in `sandbox/compose.sandbox.yaml` (or keep a
-per-project override), set `PORT_BASE` in the project `.sandbox.env`, and
-run the sandbox in long mode:
+For known, contiguous dev ports, opt into a window in the project's
+`.sandbox.env` and run the sandbox in long mode:
 
 ```bash
-just up proj-alpha      # instead of `shell`
-just attach proj-alpha
-open "http://localhost:$(grep '^PORT_BASE=' ~/ai-projects/proj-alpha/.sandbox.env | cut -d= -f2)"
+# in ~/ai-projects/proj-alpha/.sandbox.env
+SANDBOX_PORTS=1
+PORT_BASE=5173
+PORT_BASE_END=5199
 ```
+
+```bash
+just up proj-alpha
+just attach proj-alpha
+```
+
+Mac `localhost:N` maps to sandbox port N. The `-dsh` flavor uses its own
+`DSH_PORT_BASE` window (also only when `SANDBOX_PORTS=1`). For one-off or
+scattered ports — or a live `just shell` session — use a relay instead:
+`just expose proj-alpha 3000` (LEFT = Mac port, RIGHT = sandbox port);
+`just expose proj-alpha` lists listeners, and `just unexpose` releases.
 
 Read [RUNBOOK.md](RUNBOOK.md#two-network-layers) before inventing port
 schemes — two layers of forwarding are involved.
@@ -263,6 +287,6 @@ Notes:
 - Weekly: `just bump-agents && just build && just verify`
 - Something's off: `just verify`, then [RUNBOOK.md](RUNBOOK.md)
 - Every verb on one page: [COMMANDS.md](COMMANDS.md)
-- Reset one flavor: `just clean <p>[-dsh]` / `just purge <p>[-dsh]`
+- Reset one flavor: `just clean <p>[-dsh|-clean]` / `just purge <p>[-dsh|-clean]`
 - Nuke & pave the VM: `just vm-rebuild`
 - Change VM size: set `cpus`/`memory`/`disk` in `.lima.env`, then `just vm-rebuild`

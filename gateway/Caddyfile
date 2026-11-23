@@ -66,7 +66,8 @@ http://host.docker.internal:4000, http://{$DOCKER_GATEWAY}:4000, http://127.0.0.
 	bind {$DOCKER_GATEWAY} 127.0.0.1
 	# --- OpenCode Go (primary) ---------------------------------------------------
 	# One upstream for every Go model and API family. The sandbox config sets
-	# OPENCODE_API_KEY/options.apiKey to a dummy; this line replaces it.
+	# OPENCODE_API_KEY (and the OPENCODE_GO_API_KEY alias) to a dummy; this
+	# line replaces it.
 	handle_path /opencode-go/* {
 		reverse_proxy https://opencode.ai {
 			header_up Host opencode.ai
@@ -111,10 +112,10 @@ http://host.docker.internal:4000, http://{$DOCKER_GATEWAY}:4000, http://127.0.0.
 	# 1. Add the real key to ~/.ai-secrets/ai-gateway.env:
 	#      REAL_FOO_API_KEY=...
 	# 2. Uncomment the block and replace foo / api.foo.com.
-	# 3. In OpenCode, define a custom provider (see docs/AGENT-CONFIG.md):
+	# 3. In OpenCode (v2), define a custom provider (see docs/AGENT-CONFIG.md):
 	#      baseURL: http://host.docker.internal:4000/foo/v1
-	#      apiKey:  sk-foo-sandbox-dummy
-	# 4. Add the dummy to that project's .ai.env (template:
+	#      env: ["FOO_API_KEY"]
+	# 4. Put the dummy FOO_API_KEY in that project's .ai.env (template:
 	#    sandbox/ai.env.example — includes a worked Kimi example).
 	# 5. Apply: just seed-secrets && just gateway-reload
 	#

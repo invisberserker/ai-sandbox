@@ -288,7 +288,7 @@ RUN npm install -g --no-fund --no-audit "@opencode/cli@${OPENCODE_VERSION}" \
 # api.deepseek.com (loud auth failure); with it, the gateway swaps in
 # REAL_DEEPSEEK_API_KEY in transit.
 # Lives under /root/.config/opencode/ — a named-volume path, so Docker
-# seeds a FRESH project volume with this file on first mount; user edits
+# seeds a FRESH flavor volume with this file on first mount; user edits
 # persist on the volume afterwards. See docs/AGENT-CONFIG.md before
 # changing models. NOTE: a v1-format config (singular `provider` +
 # `options.*`) is silently IGNORED by v2 — keep this file in v2 shape.
@@ -297,7 +297,7 @@ COPY rootfs/root/.config/opencode/opencode.json /root/.config/opencode/opencode.
 # --- STAGE: deepseek flavor (DeepSeek Harness web UI) --------------------------------
 # DSH is a web app, not a TUI. It runs INSIDE a sysbox sandbox (the VM stays
 # agent-less); the browser on macOS reaches it through the DSH port override
-# (sandbox/compose.dsh.yaml + `just dsh-up <project>`).
+# (sandbox/compose.dsh.yaml + `just up <project>-dsh`).
 #
 # Provider wiring is baked into the web profile and points at the gateway:
 #   http://host.docker.internal:4000/deepseek/v1
@@ -306,7 +306,7 @@ COPY rootfs/root/.config/opencode/opencode.json /root/.config/opencode/opencode.
 # the generic pi-ai OpenAI-compatible adapter, with DeepSeek compat switches.
 #
 # /root/.dsh is a named volume at runtime (compose.dsh.yaml): Docker seeds a
-# fresh volume from the image content on first mount; later edits persist.
+# fresh flavor volume from the image content on first mount; later edits persist.
 FROM toolchains AS deepseek
 ARG DSH_VERSION=unknown
 ENV DSH_HOME=/root/.dsh

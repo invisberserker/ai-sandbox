@@ -17,10 +17,12 @@ Tier 1  Lima VM "ai-box"  (vm/ai-box.yaml)
         gateway, registry mirror. No project code, no toolchains, no
         long-lived state worth backing up.
 
-Tier 2  Per-project sandboxes  (sandbox/compose.sandbox.yaml)
+Tier 2  Per-flavor sandboxes  (sandbox/compose.sandbox.yaml)
         sysbox-runc "system containers" — the ONLY place agents and
-        toolchains execute. Ephemeral root filesystems; state only in
-        per-project named volumes.
+        toolchains execute. One project dir can run up to three flavors
+        (`<name>`, `<name>-dsh`, `<name>-clean`) as separate compose
+        projects. Ephemeral root filesystems; state only in per-flavor
+        named volumes.
 ```
 
 ### Tier 0 boundary
@@ -75,7 +77,7 @@ still lands inside an unprivileged user namespace on the VM.
 kernels. We pin the noble GA 6.8 kernel and disable unattended upgrades
 (`vm/ai-box.yaml` step 2) so an apt upgrade can't silently break every
 sandbox. The escape path is documented in
-[UPDATES.md](UPDATES.md#moving-off-the-pinned-kernel), and a plain-runc
+[UPDATES.md](UPDATES.md#4-moving-off-the-pinned-kernel), and a plain-runc
 fallback profile ships commented in compose.sandbox.yaml for emergencies.
 
 ## localhost semantics — the detail that shaped everything
@@ -88,19 +90,21 @@ where "localhost" already points.
 
 The flip side (a classic surprise, internalized in
 [RUNBOOK.md](RUNBOOK.md#two-network-layers)): ports inside the sandbox's
-namespace are invisible to Lima's auto-forward. To reach them from the Mac,
-compose can map a per-project port slice onto the VM (`ports:` block +
-`PORT_BASE`), which Lima then forwards. Dev servers run *directly* in the
-sandbox (not via inner docker) are in the same situation.
+namespace are invisible to Lima's auto-forward. To reach them from the
+Mac, a sandbox can publish a per-flavor window (`SANDBOX_PORTS=1` +
+`PORT_BASE`, merged from `sandbox/compose.ports.yaml`) or a one-off relay
+(`just expose`); Lima then forwards the VM-side publish. Dev servers run
+*directly* in the sandbox (not via inner docker) are in the same
+situation.
 
 ## Image layering = update strategy
 
 Agent CLIs churn weekly; toolchains monthly; OS bases ~never. The stack
-ships three flavors — `ai-opencode`, `ai-deepseek`, and `ai-whiteboard` —
-with **identical toolchains** (node/typescript, rust, python, go); two
-carry one baked agent CLI, whiteboard is a clean slate (bring your
-own ad-hoc). Stages are ordered by churn so a volatile bump invalidates the
-least cache:
+ships three flavors — `ai-opencode` (bare name), `ai-deepseek` (`-dsh`),
+and `ai-whiteboard` (`-clean`) — with **identical toolchains**
+(node/typescript, rust, python, go); two carry one baked agent CLI,
+whiteboard is a clean slate (bring your own ad-hoc). Stages are ordered by
+churn so a volatile bump invalidates the least cache:
 
 ```
 base          ubuntu digest-pinned, system tools, inner docker-ce, sysbox tweaks
@@ -195,13 +199,13 @@ This stack deliberately runs **one daemon per sandbox** (that's the sysbox
 isolation: private docker, private store, safe `docker compose up`). Docker
 cannot share one image store across concurrent daemons — they corrupt each
 other's locks/metadata, and sharing would re-couple projects — so each
-inner daemon gets its own `/var/lib/docker` on a per-project named volume.
-Consequence: proj-a's agent and proj-b's agent pulling `postgres:16` means
-two downloads and two on-disk copies, because neither daemon can see the
-other's store. (The OUTER side never duplicates: ai-opencode/ai-deepseek
-images are built once on the outer daemon and all sandbox containers share
-them copy-on-write. Only images pulled by INNER daemons — test services
-like postgres/redis — repeat per project.)
+inner daemon gets its own `/var/lib/docker` on a per-flavor named volume.
+Consequence: proj-a's agent, proj-a-dsh's agent and proj-b's agent pulling
+`postgres:16` means three downloads and three on-disk copies, because none
+of the daemons can see another's store. (The OUTER side never duplicates:
+the flavor images are built once on the outer daemon and all sandbox
+containers share them copy-on-write. Only images pulled by INNER daemons
+— test services like postgres/redis — repeat per project-flavor.)
 
 The pull-through mirror (the `REGISTRY_IMAGE` pin in `vm/ai-box.yaml`,
 step 5) deduplicates the **network**, not the disk: every daemon (outer
@@ -210,14 +214,14 @@ through it, the first fetch of any image goes to Docker Hub, and all later
 fetches by any project are served at local-disk speed. It also makes the
 post-`vm-rebuild` warm-up cheap, since the mirror's cache dies with the VM
 but refills once per image instead of once per project. Disk duplication
-per project remains by design — the isolation you bought — and `just
-purge <dead-project>` reclaims it.
+per project-flavor remains by design — the isolation you bought — and
+`just purge <dead-project>[-dsh|-clean]` reclaims it.
 
 ## Ephemerality ladder
 
-1. **`just shell <p>`** — new container each run: OS-level mutations
-   (global packages, /etc, rogue cron) vanish; volumes persist.
-2. **`just purge <p>[-dsh]`** — also deletes that flavor's volumes
+1. **`just shell <p>[-dsh|-clean]`** — new container each run: OS-level
+   mutations (global packages, /etc, rogue cron) vanish; volumes persist.
+2. **`just purge <p>[-dsh|-clean]`** — also deletes that flavor's volumes
    (inner images, caches, agent state; the `-dsh` form includes the
    `dsh-home` volume).
 3. **`just nuke` / `vm-rebuild`** — VM deleted; survivors are exactly the

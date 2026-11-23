@@ -8,16 +8,17 @@
 #   just vm-up && just build && just verify
 #   just new proj-alpha && just up proj-alpha
 #   just new web-proj  && just up web-proj-dsh   (DeepSeek web UI)
+#   just new tools     && just up tools-clean    (no agent CLI)
 # Weekly:   just bump-agents && just build && just verify
 # Idle AM:  just activate            (OpenCode Go keepalive: dad-joke ping)
-# Reset:    just vm-rebuild   (VM)  /  just purge proj-alpha  (one project)
+# Reset:    just vm-rebuild   (VM)  /  just purge proj-alpha  (one flavor)
 #
 # FLAVORS: every project verb takes the project name with an optional
-# flavor suffix — `test` runs the OpenCode TUI sandbox, `test-dsh` the
-# DeepSeek Harness one. BOTH mount the same ~/ai-projects/test dir; the
-# suffix namespaces containers/volumes/networks (the compose project
-# name) and selects the image. Same flavor twice concurrently is refused
-# where it would corrupt (`shell` vs `up` — see the shell guard).
+# flavor suffix — `test` (OpenCode TUI), `test-dsh` (DeepSeek Harness),
+# `test-clean` (ai-whiteboard, no agent CLI). All mount the same
+# ~/ai-projects/test dir; the suffix namespaces containers/volumes/
+# networks (the compose project name) and selects the image. Same flavor
+# twice concurrently is refused where it would corrupt (`shell` vs `up`).
 #
 # VM names: commands take the VM name as a trailing argument
 # (just vm-up my-box), else $VM_NAME from your shell or .just.env,
@@ -60,51 +61,52 @@ sweep_relays vm project:
       'ids="$(docker ps -aq --filter label=ai-sandbox.relay={{project}})"; [ -n "$ids" ] && docker rm -f $ids >/dev/null; exit 0'
 
 # internal: docker compose against a project sandbox. The project arg may
-# carry a flavor suffix (-dsh today): the suffix picks the override files,
-# the image, and the compose project name. The DIR is always the bare name.
-# This recipe runs on the MAC (guards check ~/ai-projects, the mount
-# source); docker compose itself runs in the VM via limactl shell.
-# --project-directory is explicit so bind mounts resolve against the
-# project dir; --env-file points at .sandbox.env (never a repo's .env).
-# File ORDER matters: compose.ports.yaml (merged only when .sandbox.env
-# sets SANDBOX_PORTS=1) comes BEFORE compose.dsh.yaml, so the dsh
-# override's `ports: !override` REPLACES the opencode window instead of
-# unioning with it (compose >= 2.24 — the same floor the env_file
-# `required: false` below relies on).
+# carry a flavor suffix: `-dsh` selects the DeepSeek Harness override and
+# image, `-clean` selects ai-whiteboard, and the bare name is OpenCode.
+# The DIR is always the bare name. This recipe runs on the MAC (guards
+# check ~/ai-projects, the mount source); docker compose itself runs in
+# the VM via limactl shell. --project-directory is explicit so bind mounts
+# resolve against the project dir; --env-file points at .sandbox.env
+# (never a repo's .env).
+# File ORDER matters: compose.ports.yaml (only when SANDBOX_PORTS=1) comes
+# BEFORE compose.dsh.yaml, whose `ports: !override` REPLACES the opencode
+# window. The dsh dev window is its own opt-in file, merged LAST. That
+# order relies on docker compose >= 2.24 (the same floor as env_file
+# `required: false` in compose.sandbox.yaml).
 [private]
 compose vm project *args:
     #!/bin/bash
     set -euo pipefail
     p="{{project}}"
     case "$p" in
-      *-dsh) base="${p%-dsh}"; flavor="deepseek" ;;
-      *)     base="$p";        flavor="opencode" ;;
+      *-dsh)   base="${p%-dsh}";   flavor="deepseek" ;;
+      *-clean) base="${p%-clean}"; flavor="whiteboard" ;;
+      *)       base="$p";          flavor="opencode" ;;
     esac
     d="$HOME/ai-projects/$base"
     g="/mnt/projects/$base"
     [ -d "$d" ] || { echo "no project dir ~/ai-projects/$base (try: just new $base)" >&2; exit 1; }
     [ -f "$d/.sandbox.env" ] || { echo "no ~/ai-projects/$base/.sandbox.env (try: just new $base)" >&2; exit 1; }
-    # optional shared date-tag pin — all flavors build together (just build)
-    tag="$(grep -E '^IMAGE_TAG=' "$d/.sandbox.env" | tail -1 | cut -d= -f2 || true)"
-    # Legacy SANDBOX_IMAGE (the old per-flavor template shipped it):
-    #   same flavor, no tag → stale default: silent, ignored.
-    #   same flavor WITH a date tag → a deliberate pin: honor it (the
-    #     IMAGE_TAG knob, if also set, wins).
-    #   a DIFFERENT flavor → the file picked a flavor by its old name —
-    #     say so (delete the line, or use the right verb/suffix).
-    img_line="$(grep -E '^SANDBOX_IMAGE=' "$d/.sandbox.env" | tail -1 | cut -d= -f2 || true)"
-    if [ -n "$img_line" ]; then
-        case "$img_line" in
-            "ai-$flavor") ;;
-            "ai-$flavor":*) [ -n "$tag" ] || tag="${img_line##*:}" ;;
-            *) echo "note: $base/.sandbox.env sets SANDBOX_IMAGE=$img_line — ignored; this verb runs ai-$flavor (flavors are per-verb now: the -dsh suffix runs the DeepSeek one). Remove the line, or move a date pin to IMAGE_TAG=." >&2 ;;
-        esac
-    fi
+    # compose-style value: last assignment wins, inline comment stripped.
+    env_value() { # env_value <file> <key>
+        [ -f "$1" ] || return 0
+        sed -n "s/^$2=//p" "$1" | tail -1 \
+          | sed 's/[[:space:]]*#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//'
+    }
+    # Optional shared tag pin — all flavors are built together by `just build`.
+    tag="$(env_value "$d/.sandbox.env" IMAGE_TAG)"
+    ports_on=0
+    [ "$(env_value "$d/.sandbox.env" SANDBOX_PORTS)" = "1" ] && ports_on=1
     files="{{repo_in_vm}}/sandbox/compose.sandbox.yaml"
-    grep -q '^SANDBOX_PORTS=1' "$d/.sandbox.env" \
-      && files="$files -f {{repo_in_vm}}/sandbox/compose.ports.yaml" || true
-    [ "$flavor" = "deepseek" ] \
-      && files="$files -f {{repo_in_vm}}/sandbox/compose.dsh.yaml" || true
+    if [ "$ports_on" = "1" ]; then
+        files="$files -f {{repo_in_vm}}/sandbox/compose.ports.yaml"
+    fi
+    if [ "$flavor" = "deepseek" ]; then
+        files="$files -f {{repo_in_vm}}/sandbox/compose.dsh.yaml"
+        if [ "$ports_on" = "1" ]; then
+            files="$files -f {{repo_in_vm}}/sandbox/compose.dsh.ports.yaml"
+        fi
+    fi
     # A FOLLOWING log stream is infinite by design. Ctrl+C travels through
     # the ssh pty as the remote side exiting 130 — the follow's intended
     # end, not a failure. Remap 130 → 0 for follow invocations only, so
@@ -122,6 +124,7 @@ compose vm project *args:
 
 # ─── VM lifecycle ─────────────────────────────────────────────────────────────
 
+# vm-up [NAME] — create/provision the VM, or start an existing one.
 [group('vm')]
 vm-up name=vm_name:
     #!/bin/bash
@@ -179,25 +182,28 @@ vm-up name=vm_name:
         echo "VM '{{name}}' up. Next: just build {{name}} && just verify {{name}}"
     fi
 
+# vm-stop [NAME] — stop the VM; nothing is deleted.
 [group('vm')]
 vm-stop name=vm_name:
     limactl stop {{name}}
 
+# vm-shell [NAME] — interactive shell on the VM; never run agents there.
 [group('vm')]
 vm-shell name=vm_name:
     limactl shell {{name}}
 
-# vm-rebuild [NAME] — delete + recreate the VM and rebuild images
+# vm-rebuild [NAME] — delete + recreate the VM and rebuild images.
 [group('vm')]
 vm-rebuild name=vm_name:
     #!/bin/bash
     set -euo pipefail
     # Survivors: source + secrets template (Mac). Casualties: image cache,
-    # per-project volumes, mirror cache. First pull after is full-size.
+    # per-flavor volumes, mirror cache. First pull after is full-size.
     limactl delete -f {{name}}
     just -f {{justfile()}} vm-up {{name}}
     just -f {{justfile()}} build {{name}}
 
+# status [NAME] — read-only health screen: lima, kernel holds, docker/sysbox, images.
 [group('vm')]
 status name=vm_name:
     #!/bin/bash
@@ -217,9 +223,12 @@ status name=vm_name:
 
 # ─── images ───────────────────────────────────────────────────────────────────
 
+# build [VM] — build ai-base + the three flavor images.
 [group('images')]
-build name=vm_name:  # build base + all three flavors (whiteboard/opencode/deepseek)
+build name=vm_name:
     just -f {{justfile()}} _bake default {{name}}
+
+# internal: run docker buildx bake for a named group.
 
 [private]
 _bake group name:
@@ -230,33 +239,42 @@ _bake group name:
     limactl shell {{name}} -- env IMAGE_TAG="$IMAGE_TAG" bash -lc \
       "cd {{repo_in_vm}}/images && docker buildx bake -f docker-bake.hcl {{group}}"
 
-# bump-agents — refresh agent CLI pins, then rebuild only their tails
+# bump-agents — refresh agent CLI pins, then rebuild only their tails.
 [group('images')]
 bump-agents:
     bash "{{repo_dir}}/scripts/bump.sh" --agents
 
+# bump-all — refresh every toolchain/base pin, then `just build && just verify`.
 [group('images')]
 bump-all:
     bash "{{repo_dir}}/scripts/bump.sh" --all
 
+# verify [VM] — smoke-test the VM, images, sandbox semantics, and two-flavor concurrency.
 [group('images')]
 verify name=vm_name:
     limactl shell {{name}} -- bash {{repo_in_vm}}/scripts/verify.sh
 
 # ─── projects / sandboxes ─────────────────────────────────────────────────────
 
-# Writes one file only (safe on an existing checkout). NAME must be
-# lowercase/digits/-/_ and must not end in a reserved flavor suffix —
-# flavors are chosen per invocation, not by this file.
-# new NAME — scaffold ~/ai-projects/NAME (OpenCode: `just up NAME`; DeepSeek: `just up NAME-dsh`).
+# Writes one file only (safe on an existing checkout). NAME must start
+# with a letter or digit, use only lowercase/digits/-/_, and must not end
+# in a reserved flavor suffix (-dsh / -clean) — flavors are chosen per
+# invocation, not by this file.
+
+# new NAME — scaffold ~/ai-projects/NAME for any flavor suffix.
 [group('projects')]
 new name:
     #!/bin/bash
     set -euo pipefail
     p="{{name}}"
     case "$p" in
-        *[!a-z0-9_-]*|'') echo "project name '$p': use lowercase letters, digits, - or _ (it is the compose project name)" >&2; exit 1 ;;
-        *-dsh) echo "project name '$p' ends in the reserved -dsh suffix — create the bare dir: just new ${p%-dsh}, then: just up ${p%-dsh}-dsh" >&2; exit 1 ;;
+        ''|*[!a-z0-9_-]*|[!a-z0-9]*)
+            echo "project name '$p': start with a letter or digit; use lowercase letters, digits, - or _ (it is the compose project name)" >&2
+            exit 1 ;;
+        *-dsh|*-clean)
+            suffix="${p##*-}"
+            echo "project name '$p' ends in the reserved -$suffix flavor suffix — create the bare dir: just new ${p%-$suffix}, then: just up $p" >&2
+            exit 1 ;;
     esac
     d="$HOME/ai-projects/{{name}}"
     mkdir -p "$d"
@@ -268,9 +286,11 @@ new name:
     fi
     echo "enter with:   just up {{name}}         (OpenCode TUI; then: just attach {{name}})"
     echo "web UI:       just up {{name}}-dsh      (DeepSeek Harness; URL printed after start)"
+    echo "no agent:     just up {{name}}-clean    (ai-whiteboard toolchains)"
 
 # Long agent sessions: `just up` + `just attach` + tmux inside.
-# shell NAME[-dsh] [VM] — one-off session; refused if ANY container of this flavor is running.
+
+# shell NAME[-dsh|-clean] [VM] — one-off session; refused if any container of that flavor is running.
 [group('projects')]
 shell name vm=vm_name:
     #!/bin/bash
@@ -289,10 +309,12 @@ shell name vm=vm_name:
     just -f {{justfile()}} compose {{vm}} {{name}} run --rm agent
 
 # The -dsh suffix starts the DeepSeek Harness flavor and prints its macOS
-# URL + the first-auth hint after start. Refused while a live `shell`
-# session of that flavor holds the store — its container shares the up
-# sandbox's inner-docker-data, and two inner dockerds corrupt it.
-# up NAME[-dsh] [VM] — sandbox runs in the background; live context survives across days.
+# URL + the first-auth hint after start; -clean starts ai-whiteboard.
+# Refused while a live `shell` session of that flavor holds the store — its
+# container shares the up sandbox's inner-docker-data, and two inner
+# dockerds corrupt it.
+
+# up NAME[-dsh|-clean] [VM] — sandbox runs in the background; live context survives across days.
 [group('projects')]
 up name vm=vm_name:
     #!/bin/bash
@@ -309,31 +331,56 @@ up name vm=vm_name:
     p="{{name}}"
     case "$p" in
       *-dsh)
-        port="$(grep -E '^DSH_PORT=' "$HOME/ai-projects/${p%-dsh}/.sandbox.env" 2>/dev/null | tail -1 | cut -d= -f2 || true)"
+        f="$HOME/ai-projects/${p%-dsh}/.sandbox.env"
+        port="$(sed -n 's/^DSH_PORT=//p' "$f" 2>/dev/null | tail -1 \
+          | sed 's/[[:space:]]*#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//')"
         echo "DSH web UI:  http://localhost:${port:-3080}"
         echo "first auth:  just logs {{name}} — open the /deepseek?token=… link it prints"
         ;;
     esac
 
-# attach NAME[-dsh] [VM] — shell into a running sandbox; exit stops nothing.
+# attach NAME[-dsh|-clean] [VM] — shell into a running sandbox; exit stops nothing.
 [group('projects')]
 attach name vm=vm_name:
     just -f {{justfile()}} compose {{vm}} {{name}} exec agent bash
 
-# (the dsh web launcher prints its URL/token here on every boot). REFUSED
+# The dsh web launcher prints its URL/token here on every boot. REFUSED
 # without an up'd container: a live `just shell` session's log is the
 # raw TUI escape stream — it floods your terminal and can wedge the
 # keyboard protocol (docs/FAQ.md).
-# logs NAME[-dsh] [-f] [VM] — print a running sandbox's log (dsh URL/token), like docker logs.
+
+# logs NAME[-dsh|-clean] [VM] [-f] — print a running sandbox's log; -f follows.
 [group('projects')]
-logs name follow="" vm=vm_name:
+logs name first="" second="":
     #!/bin/bash
     set -euo pipefail
-    case "{{follow}}" in
-        ""|-f|--follow) ;;
-        *) echo "unknown flag '{{follow}}' — want -f (or --follow) to stream, or nothing to print and exit" >&2; exit 1 ;;
+    # `first`/`second` carry [VM] and [-f] in either order (just has no flags).
+    vm="{{vm_name}}"
+    follow=""
+    case "{{first}}" in
+        "")
+            ;;
+        -f|--follow)
+            follow="{{first}}"
+            if [ -n "{{second}}" ]; then vm="{{second}}"; fi
+            ;;
+        -*)
+            echo "unknown flag '{{first}}' — want -f (or --follow) to stream, or nothing to print and exit" >&2
+            exit 1
+            ;;
+        *)
+            vm="{{first}}"
+            follow="{{second}}"
+            ;;
     esac
-    running="$(just -f {{justfile()}} running_containers {{vm}} {{name}})"
+    case "$vm" in
+        -*) echo "bad VM name '$vm'" >&2; exit 1 ;;
+    esac
+    case "$follow" in
+        ""|-f|--follow) ;;
+        *) echo "unknown flag '$follow' — want -f (or --follow) to stream, or nothing to print and exit" >&2; exit 1 ;;
+    esac
+    running="$(just -f {{justfile()}} running_containers "$vm" {{name}})"
     if ! printf '%s' "$running" | grep -qx "{{name}}-agent-1"; then
         echo "no running sandbox '{{name}}' — if you are in a just shell session, its log is the raw TUI escape stream (terminal-flooding; see docs/FAQ.md)" >&2
         exit 1
@@ -342,16 +389,15 @@ logs name follow="" vm=vm_name:
     # lines and exit. -f/--follow streams live instead; the compose
     # recipe remaps that follow's Ctrl+C exit (130) to 0 — see its
     # comment there.
-    farg="{{follow}}"
-    just -f {{justfile()}} compose {{vm}} {{name}} logs --tail 100 $farg agent
+    just -f {{justfile()}} compose "$vm" {{name}} logs --tail 100 $follow agent
 
-# clean NAME[-dsh] [VM] — compose down for this flavor (containers, network, relays); volumes kept.
+# clean NAME[-dsh|-clean] [VM] — compose down for this flavor (containers, network, relays); volumes kept.
 [group('projects')]
 clean name vm=vm_name:
     just -f {{justfile()}} sweep_relays {{vm}} {{name}}
     just -f {{justfile()}} compose {{vm}} {{name}} down
 
-# purge NAME[-dsh] [VM] — tier-2 reset for this flavor: wipe its volumes; prompts y/N.
+# purge NAME[-dsh|-clean] [VM] — tier-2 reset for this flavor: wipe its volumes; prompts y/N.
 [group('projects')]
 purge name vm=vm_name:
     #!/bin/bash
@@ -368,6 +414,7 @@ purge name vm=vm_name:
 # scripted session is TTY-less (-T), so cron/launchd works too. The fixed
 # burner name `go-keepalive` is owned by this recipe — a run killed
 # midway is healed by the next one; never put real work there.
+
 # activate [VM] — keepalive ping for the OpenCode Go 5h rolling window.
 [group('projects')]
 activate vm=vm_name:
@@ -412,14 +459,31 @@ activate vm=vm_name:
 # automatically via DNS — no re-expose needed. Works for up'd sandboxes
 # AND live `just shell` sessions. Conflict on a taken VM port → the
 # error suggests another Mac-side number.
-# expose NAME[-dsh] [HOST[:CONTAINER]] [VM] — forward one sandbox port to macOS localhost.
+
+# expose NAME[-dsh|-clean] [HOST[:CONTAINER]] [VM] — forward one sandbox port to macOS localhost.
 [group('projects')]
 expose name spec="" vm=vm_name:
     #!/bin/bash
     set -euo pipefail
-    if [ -z "{{spec}}" ]; then
+    spec="{{spec}}"
+    vm="{{vm}}"
+    # With no port spec, the first optional slot is the VM name.
+    case "$spec" in
+        "") ;;
+        [0-9]*|*:*)
+            printf '%s' "$spec" | grep -qE '^[0-9]+(:[0-9]+)?$' \
+              || { echo "bad spec '$spec' — want [HOST[:CONTAINER]], e.g. 3000 or 3001:3000" >&2; exit 1; } ;;
+        *)
+            [ "$vm" = "{{vm_name}}" ] \
+              || { echo "unexpected argument '$vm' after VM '$spec'" >&2; exit 1; }
+            vm="$spec"; spec="" ;;
+    esac
+    case "$vm" in
+        -*) echo "bad VM name '$vm'" >&2; exit 1 ;;
+    esac
+    if [ -z "$spec" ]; then
         # discovery: what is listening inside the sandbox + relay status
-        limactl shell {{vm}} -- bash -lc '
+        limactl shell "$vm" -- bash -lc '
           cid="$(docker ps -q --filter label=com.docker.compose.project={{name}} | head -1)"
           if [ -z "$cid" ]; then
             echo "no running sandbox for {{name}} (try: just up {{name}} or a live just shell)" >&2
@@ -447,13 +511,9 @@ expose name spec="" vm=vm_name:
         '
         exit 0
     fi
-    limactl shell {{vm}} -- bash -lc '
+    limactl shell "$vm" -- bash -lc '
       set -e
-      spec="{{spec}}"
-      if ! echo "$spec" | grep -qE "^[0-9]+(:[0-9]+)?$"; then
-        echo "bad spec $spec — want [HOST[:CONTAINER]], e.g. 3000 or 3001:3000" >&2
-        exit 1
-      fi
+      spec="$1"
       target="${spec##*:}"
       host="${spec%%*:}"
       cid="$(docker ps -q --filter label=com.docker.compose.project={{name}} | head -1)"
@@ -473,23 +533,33 @@ expose name spec="" vm=vm_name:
         exit 1
       fi
       echo "exposed: Mac localhost:$host → {{name}} :$target"
-    '
+    ' _ "$spec"
 
-# `just unexpose --all my-box` passes the VM name in the second slot.
+# `just unexpose --all [VM]` takes the VM in the optional slot.
 # No y/N on --all: relays carry no data (re-running `expose` restores).
 # Three widening scopes:
 #   just unexpose test 3001     the :3001 claim
 #   just unexpose test          every relay of that flavor
 #   just unexpose --all         every relay on the VM ("start clean")
-# unexpose NAME[-dsh] [HOST[:CONTAINER]] [VM] — release relays; `--all` = every relay on the VM.
+
+# unexpose NAME[-dsh|-clean] [HOST[:CONTAINER]] [VM] — release relays; `--all` = every relay on the VM.
 [group('projects')]
 unexpose name spec="" vm=vm_name:
     #!/bin/bash
     set -euo pipefail
+    spec="{{spec}}"
+    vm="{{vm}}"
+    if [ "{{name}}" != "--all" ] && [ "$spec" = "--all" ]; then
+        echo "--all replaces the project name, not the spec: just unexpose --all [VM]" >&2
+        exit 1
+    fi
     if [ "{{name}}" = "--all" ]; then
-        vmname="{{vm}}"
-        [ -n "{{spec}}" ] && vmname="{{spec}}" || true
-        limactl shell "$vmname" -- bash -lc '
+        if [ -n "$spec" ]; then
+            [ "$vm" = "{{vm_name}}" ] \
+              || { echo "unexpected argument '$vm' after VM '$spec'" >&2; exit 1; }
+            vm="$spec"
+        fi
+        limactl shell "$vm" -- bash -lc '
           ids="$(docker ps -aq --filter label=ai-sandbox.relay)"
           if [ -z "$ids" ]; then
             echo "0 relays exposed — already clean"
@@ -501,10 +571,24 @@ unexpose name spec="" vm=vm_name:
         '
         exit 0
     fi
-    key="{{spec}}"
+    # With no port spec, the first optional slot is the VM name.
+    case "$spec" in
+        "") ;;
+        [0-9]*|*:*)
+            printf '%s' "$spec" | grep -qE '^[0-9]+(:[0-9]+)?$' \
+              || { echo "bad spec '$spec' — want [HOST[:CONTAINER]], e.g. 3001 or 3001:3000" >&2; exit 1; } ;;
+        *)
+            [ "$vm" = "{{vm_name}}" ] \
+              || { echo "unexpected argument '$vm' after VM '$spec'" >&2; exit 1; }
+            vm="$spec"; spec="" ;;
+    esac
+    case "$vm" in
+        -*) echo "bad VM name '$vm'" >&2; exit 1 ;;
+    esac
+    key="$spec"
     case "$key" in *:*) key="${key%%:*}" ;; esac
     if [ -z "$key" ]; then
-        limactl shell {{vm}} -- bash -lc '
+        limactl shell "$vm" -- bash -lc '
           ids="$(docker ps -aq --filter label=ai-sandbox.relay={{name}})"
           if [ -z "$ids" ]; then
             echo "no relays for {{name}}"
@@ -515,7 +599,7 @@ unexpose name spec="" vm=vm_name:
           echo "released all relays for {{name}}"
         '
     else
-        limactl shell {{vm}} -- bash -lc "docker rm -f {{name}}-expose-$key >/dev/null 2>&1 && echo \"released {{name}} claim on :$key\" || echo \"no relay: {{name}}-expose-$key\""
+        limactl shell "$vm" -- bash -lc "docker rm -f {{name}}-expose-$key >/dev/null 2>&1 && echo \"released {{name}} claim on :$key\" || echo \"no relay: {{name}}-expose-$key\""
     fi
 
 # ─── deepseek helpers ─────────────────────────────────────────────────────────
@@ -523,27 +607,28 @@ unexpose name spec="" vm=vm_name:
 # `just clean <p>-dsh`, `just logs <p>-dsh` (URL/token), `just purge
 # <p>-dsh`, `just expose <p>-dsh HOST[:PORT]`. The one bare-name
 # convenience left is dsh-url: it only reads the project dir on the Mac
-# (no VM roundtrip).
+# (no VM roundtrip). The first-auth token is NOT here — it lives in the
+# startup logs: `just logs <p>-dsh`.
 
-# The first-auth token is NOT here — it lives in the startup logs:
-# `just logs <p>-dsh`.
-# dsh-url NAME — print the plain macOS URL for a dsh project.
+# dsh-url NAME[-dsh] — print the plain macOS URL for a dsh project.
 [group('projects')]
 dsh-url name:
     #!/bin/bash
     set -euo pipefail
-    f="$HOME/ai-projects/{{name}}/.sandbox.env"
-    port="$(grep -E '^DSH_PORT=' "$f" 2>/dev/null | tail -1 | cut -d= -f2 || true)"
+    p="{{name}}"
+    f="$HOME/ai-projects/${p%-dsh}/.sandbox.env"
+    port="$(sed -n 's/^DSH_PORT=//p' "$f" 2>/dev/null | tail -1 \
+      | sed 's/[[:space:]]*#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//')"
     echo "http://localhost:${port:-3080}"
 
 # ─── secrets / gateway ────────────────────────────────────────────────────────
 
-# Re-seed gateway keys after editing ~/.ai-secrets/ai-gateway.env
+# seed-secrets [VM] — install ~/.ai-secrets/ai-gateway.env on the VM and restart the gateway.
 [group('secrets')]
 seed-secrets name=vm_name:
     limactl shell {{name}} -- sudo bash {{repo_in_vm}}/scripts/seed-secrets.sh
 
-# gateway-reload [NAME] — copy Caddyfile to VM, validate, restart gateway
+# gateway-reload [NAME] — copy Caddyfile to VM, validate, restart gateway.
 [group('secrets')]
 gateway-reload name=vm_name:
     #!/bin/bash
@@ -570,7 +655,7 @@ gateway-reload name=vm_name:
 
 # ─── last resort ──────────────────────────────────────────────────────────────
 
-# Delete the VM entirely (tier-3 reset). Source + secrets survive on the Mac.
+# nuke [NAME] — delete the VM entirely (tier-3 reset); source + secrets survive on the Mac.
 [group('vm')]
 nuke name=vm_name:
     #!/bin/bash

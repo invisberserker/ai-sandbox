@@ -3,7 +3,9 @@
 Symptoms → causes → fixes. When in doubt: `just verify` first; it narrows
 the layer faster than reading logs.
 
-## Two network layers (read this before debugging any port)
+## Two network layers
+
+Read this before debugging any port.
 
 ```
 [inner container]──inner netns──[sandbox netns]──bridge──[VM]──lima forward──[macOS]
@@ -18,7 +20,8 @@ the layer faster than reading logs.
     `SANDBOX_PORTS=1` + `PORT_BASE`/`PORT_BASE_END` in the project's
     `.sandbox.env` — the Justfile merges `sandbox/compose.ports.yaml` on
     `just up`, publishing your window AS-IS (sandbox port N → Mac
-    localhost:N). The `-dsh` flavor replaces it with its own
+    localhost:N). The DSH UI is always published; with the same switch
+    on, the `-dsh` flavor replaces the base window with its own
     (`DSH_PORT_BASE`), so both flavors of one dir coexist.
   - **ad-hoc relay** (any port, any time, live `shell` sessions too):
     `just expose <name> [HOST:CONTAINER]` — a throwaway socat relay on
@@ -76,7 +79,7 @@ Stopgap while fixing: the fallback profile at the bottom of
 sandbox/compose.sandbox.yaml — `runtime: runc`, the outer socket mount,
 and `SANDBOX_NO_DOCKERD=1` (without that env the entrypoint still tries
 to rm the mounted socket and start its own dockerd — the container dies
-instantly). Lose: per-project docker isolation + port collision-freedom.
+instantly). Lose: per-flavor docker isolation + port collision-freedom.
 
 ## Inner dockerd fails inside a sandbox
 
@@ -91,10 +94,10 @@ The entrypoint prints `[sandbox-init] ERROR ... Log tail:` — read it.
 - **Corrupted inner image store** (`failed to read ... metadata.json`):
   two causes. A SIGKILLed dockerd on the persistent volume (exactly what
   the entrypoint's graceful shutdown prevents), or a second daemon on
-  the same store — which is what happens if you `just shell <p>` while
-  the project is already `up`; both containers mount this project's
-  `inner-docker-data` volume. If you hit it anyway: `just purge <p>`.
-  Painful once, then never again.
+  the same store. The `shell` recipe refuses to start while that flavor
+  is `up` (or a forgotten `shell` session still holds the store) — the
+  guard exists to prevent exactly this. If you hit it via raw docker
+  anyway: `just purge <p>[-dsh|-clean]`. Painful once, then never again.
 
 ## DNS: nested containers can't resolve
 
@@ -420,9 +423,9 @@ du -sh /mnt/projects/*                              # source (should be small �
                                                     #  node_modules in the tree)
 ```
 
-Fixes: `just clean <stale-project>[-dsh]` (or `purge` if the project is
-dead), `docker image prune` on
-the VM. The build-cache redirect exists so
+Fixes: `just clean <stale-project>[-dsh|-clean]` (or `purge` if the
+project-flavor is dead), `docker image prune` on the VM. The build-cache
+redirect exists so
 `target/` and `node_modules` DON'T land in the Mac tree — if they do,
 some tool is bypassing the env (check `.cargo/config.toml` overrides or a
 project-local npm config).
@@ -472,8 +475,8 @@ Reading a stuck boot (things the probe clock won't tell you):
 
 ## Escalation ladder (when something is deeply wedged)
 
-1. `just clean <p>[-dsh]` → retry `shell`
-2. `just purge <p>[-dsh]` → retry (drops inner images/caches/agent
+1. `just clean <p>[-dsh|-clean]` → retry `shell`
+2. `just purge <p>[-dsh|-clean]` → retry (drops inner images/caches/agent
    state; the -dsh form also drops dsh-home)
 3. fallback runtime profile (see above) for *that project*
 4. `just vm-rebuild`

@@ -3,22 +3,22 @@
 # =============================================================================
 # `just build` stamps TWO tags per image:
 #     ai-<flavor>:latest    — what compose.sandbox.yaml consumes by default
-#     ai-<flavor>:YYYYMMDD  — what you pin a project to (in its .env)
-#                             when you want a known-good, reproducible day
+#     ai-<flavor>:YYYYMMDD  — what a project pins via IMAGE_TAG in its
+#                             .sandbox.env for a known-good, reproducible day
 #
 # Refresh pins with `just bump-agents` / `just bump-all` (scripts/bump.sh
 # queries npm / GitHub / upstream dist indexes, then rewrites the defaults
 # below). Edit manually any time; the file is the contract — keep the
 # `variable "X" { default = "..." }` shape: bump.sh rewrites by pattern.
 #
-# Three flavors, identical toolchains; two carry one agent CLI each, one
-# carries none (see Dockerfile):
-#   ai-opencode     OpenCode TUI + baked opencode.json (OpenCode Go +
-#                    DeepSeek endpoint-overrides)
-#   ai-deepseek     DeepSeek Harness web UI + baked web profile
-#   ai-whiteboard   NO agent CLI — a clean slate: full toolchains + utils,
-#                   for working with any agent ad-hoc (npx …, uv tool
-#                   install …, or download whatever the task needs)
+# Three flavor images, identical toolchains; two carry one agent CLI each,
+# one carries none (see Dockerfile):
+#   ai-opencode     bare project name; OpenCode TUI + baked opencode.json
+#                    (DeepSeek default + OpenCode Go endpoint-overrides)
+#   ai-deepseek     -dsh suffix; DeepSeek Harness web UI + baked web profile
+#   ai-whiteboard   -clean suffix; NO agent CLI — full toolchains + utils,
+#                    for working with any agent ad-hoc (npx …, uv tool
+#                    install …, or download whatever the task needs)
 #
 # The ubuntu base digest lives ONLY here. The Dockerfile takes the whole
 # base image ref as the UBUNTU_IMAGE build-arg, and bake passes it to every

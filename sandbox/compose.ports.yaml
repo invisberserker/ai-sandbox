@@ -1,11 +1,14 @@
 # =============================================================================
-# Per-project dev-server window — merged by the Justfile's compose wrapper
-# ONLY when the project's .sandbox.env sets SANDBOX_PORTS=1 (default off).
+# Per-project dev-server window — opt-in, merged only with SANDBOX_PORTS=1
 # =============================================================================
-# IDENTITY mapping: sandbox port N appears on macOS localhost:N for every
-# N in the window (published on the VM's 127.0.0.1; lima forwards VM ports
-# to the Mac as-is, same number). Set the window to cover YOUR app's
-# ports, e.g. a vite app on :5173 → PORT_BASE=5173 PORT_BASE_END=5199.
+# The Justfile includes this file only when the project's .sandbox.env sets
+# SANDBOX_PORTS=1 (default off). It applies to `just up`; the Justfile's
+# `shell` path deliberately publishes no ports.
+#
+# IDENTITY mapping: sandbox port N appears on macOS localhost:N for every N
+# in the window (published on the VM's 127.0.0.1; lima forwards VM ports to
+# the Mac as-is). Set the window to cover YOUR app's ports, e.g. a vite app
+# on :5173 → PORT_BASE=5173 PORT_BASE_END=5199.
 #
 # Collisions behave like host docker: a second sandbox claiming an
 # overlapping window fails loudly at `up` ("port already allocated") —
@@ -13,7 +16,6 @@
 #   just expose <name> 3000
 #
 # Scope notes:
-#   - applies to `just up` only (`compose run`/`shell` doesn't publish);
 #   - dev servers must bind 0.0.0.0 INSIDE the sandbox (`vite --host`) —
 #     the publish DNATs to the sandbox's bridge IP, so loopback-only
 #     listeners are invisible;
@@ -21,11 +23,9 @@
 #     VM-side publish (that's the range's point: postgres et al.);
 #   - ports in the window with no listener just refuse connections.
 #
-# The -dsh flavor REPLACES this window with its own (DSH_PORT_BASE in
-# .sandbox.env) via the `ports: !override` list in compose.dsh.yaml —
-# merged AFTER this file — so the two flavors of one project never
-# collide. Windows are per-FLAVOR constants; only concurrent PROJECTS
-# need distinct values.
+# A -dsh sandbox never inherits this window: compose.dsh.yaml replaces it
+# with the DSH UI, and compose.dsh.ports.yaml (same opt-in) adds the dsh
+# range instead.
 # =============================================================================
 services:
   agent:

@@ -25,9 +25,9 @@ just verify
 ```
 
 Running sandboxes keep their old image until restarted — the running
-container is immutable. A fresh `just shell <p>` (or `clean` + `up`) picks
-up the new `:latest`; for the DeepSeek flavor: `clean <p>-dsh` +
-`up <p>-dsh`.
+container is immutable. Restart the flavor with `clean <p>[-dsh|-clean]`
+then `up <p>[-dsh|-clean]` to pick up the new `:latest`; a fresh `just
+shell` only applies to a closed flavor.
 
 Notes:
 
@@ -42,7 +42,11 @@ Notes:
 - Want to pin a project to a known-good day? Its `.sandbox.env`:
   `IMAGE_TAG=20261120` — `just build` stamps date tags alongside
   `:latest` on every run, and the pin applies to every flavor of the
-  project (they are built together).
+  project (they are built together). `IMAGE_TAG` accepts any tag on the
+  standard `ai-<flavor>` image, not only dates.
+- `SANDBOX_IMAGE` in `.sandbox.env` is no longer read. The verb's suffix
+  (`-dsh`, `-clean`, or bare) selects the image; a stale line from an old
+  template is ignored. Move any date pin to `IMAGE_TAG`.
 
 ## 2. Refresh toolchains (monthly-ish)
 
@@ -75,7 +79,7 @@ What dies (by design, all re-derivable):
 - the outer image cache (`just build` re-derives it; the mirror's cache
   dies too, so the first pull of each base layer after a rebuild is
   full-size, and later pulls are local),
-- every project's named volumes: inner docker images, build caches,
+- every flavor's named volumes: inner docker images, build caches,
   agent state, and DSH state. DSH's baked profile re-seeds on first
   mount; provider auth is the dummy gateway wiring, so no login is lost.
   **If you care about a project's inner images or DSH sessions, re-plan
@@ -120,7 +124,7 @@ When you *want* a newer kernel/OS, do it deliberately:
    `sandbox/compose.sandbox.yaml`): `runtime: runc`, the outer docker
    socket mount, and the `SANDBOX_NO_DOCKERD=1` env (the entrypoint then
    skips its inner dockerd and the socket cleanup that would otherwise
-   rm the mounted socket). You lose per-project docker isolation and
+   rm the mounted socket). You lose per-flavor docker isolation and
    port collision-freedom — treat it as a crutch while you roll back the
    kernel (`sudo apt install linux-image-6.8.0-XX-generic && update-grub
    && reboot`, holds back on) or wait for a sysbox release.

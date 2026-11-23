@@ -18,28 +18,28 @@ lives in `.lima.env` instead — each `path=value` line becomes a
 `limactl --set` at VM creation (template: `.lima.env.example`); it is
 addressing vs. building: two files, two jobs. The repo stays at
 `~/ai-projects/ai-sandbox` either way. The private recipes
-(`compose`, `is_up`, `sweep_relays`, `_bake`) are the internal plumbing
-behind the verbs below — not part of the API.
+(`compose`, `running_containers`, `sweep_relays`, `_bake`) are the
+internal plumbing behind the verbs below — not part of the API.
 
 ## VM lifecycle
 
 | Command | What it does |
 | --- | --- |
-| `just vm-up [vm]` | Create + provision the VM from `vm/ai-box.yaml` (first run ~5 min: six provisioning steps, gated by readiness probes). Safe to re-run: on an existing VM it starts it (no-op if running) instead of re-creating. Also applies + verifies the VM user's docker group. `.lima.env` (guest user, sizing) applies at creation. |
+| `just vm-up [vm]` | Create + provision the VM from `vm/ai-box.yaml` (first run ~5 min: seven provisioning steps, gated by readiness probes). Safe to re-run: on an existing VM it starts it (no-op if running) instead of re-creating. Also applies + verifies the VM user's docker group. `.lima.env` (guest user, sizing) applies at creation. |
 | `just vm-stop [vm]` | Stop the VM. Nothing is deleted. |
 | `just vm-shell [vm]` | Interactive shell ON the VM — logs, docker, the mirror. Don't run agents there ([SECURITY.md](SECURITY.md)). |
 | `just status [vm]` | One screen of health: lima state, kernel holds, docker/sysbox versions, local images. Read-only. |
-| `just vm-rebuild [vm]` | Delete + recreate the VM, then rebuild the images. **No prompt** — it acts immediately. Survivors: source + `~/.ai-secrets` on the Mac; casualties: outer image cache, per-project volumes, mirror cache. |
+| `just vm-rebuild [vm]` | Delete + recreate the VM, then rebuild the images. **No prompt** — it acts immediately. Survivors: source + `~/.ai-secrets` on the Mac; casualties: outer image cache, per-flavor volumes, mirror cache. |
 | `just nuke [vm]` | Delete the VM entirely — prompts y/N. Same survivors as `vm-rebuild`; recreate with `just vm-up <vm> && just build <vm>` (the recipe prints it with your name filled in). |
 
 ## Images
 
 | Command | What it does |
 | --- | --- |
-| `just build [vm]` | Build `ai-base` + the three flavors (`ai-whiteboard`, `ai-opencode`, `ai-deepseek`) inside the VM. Stamps two tags per image: `:latest` (what sandboxes consume) and `:YYYYMMDD` (today, for pinning a known-good day in a project's `.sandbox.env`). |
+| `just build [vm]` | Build `ai-base` + the three flavor images (`ai-whiteboard`, `ai-opencode`, `ai-deepseek`) inside the VM. Stamps two tags per image: `:latest` (what sandboxes consume) and `:YYYYMMDD`; a project pins a known-good day with `IMAGE_TAG=YYYYMMDD` in its `.sandbox.env`. |
 | `just bump-agents` | Refresh the two agent CLI pins (`OPENCODE_VERSION`, `DSH_VERSION`) from npm — the weekly habit. Follow with `just build`. |
 | `just bump-all` | Refresh every image pin (node patches within the pinned major, typescript, fnm, uv, go, rust, cargo-binstall, base digest) — the monthly-ish habit. Follow with `just build && just verify`. |
-| `just verify [vm]` | Smoke tests inside the VM: services, images, toolchains, gateway routes, one full sysbox boot. Exits nonzero if anything fails; run it whenever something feels off. |
+| `just verify [vm]` | Smoke tests inside the VM: services, images, toolchains, gateway routes, one full sysbox boot, and two flavors of one dir running concurrently. Exits nonzero if anything fails; run it whenever something feels off. |
 
 ## Projects
 
@@ -49,30 +49,31 @@ if it's missing.
 
 **Flavors are per-invocation.** Every project verb takes the project
 name with an optional flavor suffix: `<name>` runs the OpenCode TUI
-sandbox, `<name>-dsh` the DeepSeek Harness one. Both mount the same
-`~/ai-projects/<name>` dir as **separate compose projects** — disjoint
-containers, volumes and networks — so they can run at the same time over
-one source tree (the dsh one also publishes the DSH UI and persists
-`dsh-home`). A project name must never itself end in `-dsh`; `new`
-rejects it.
+sandbox, `<name>-dsh` the DeepSeek Harness one, `<name>-clean` the
+agent-free whiteboard one. All mount the same `~/ai-projects/<name>` dir
+as **separate compose projects** — disjoint containers, volumes and
+networks — so they can run at the same time over one source tree (the dsh
+one also publishes the DSH UI and persists `dsh-home`). A project name
+must never itself end in `-dsh` or `-clean`; `new` rejects both.
 
 | Command | What it does |
 | --- | --- |
-| `just new <name>` | Scaffold `~/ai-projects/<name>` with a flavor-agnostic `.sandbox.env` — one file, safe on an existing repo checkout. `<name>`: lowercase letters, digits, `-` or `_`, never a reserved flavor suffix. Pin a known-good image day with `IMAGE_TAG=YYYYMMDD` in the file. |
-| `just shell <name>[-dsh] [vm]` | One-off session: fresh container, **removed at exit** — fresh OS each run, volumes persist. For short, well-defined tasks in a CLOSED project. **Refused while ANY container of that flavor is running**: an up'd sandbox → use `attach`; a live/forgotten `shell` session → it holds the inner docker store, and the message names the container and how to remove it. |
-| `just up <name>[-dsh] [vm]` | Open the project for work: the sandbox runs in the background and **keeps running** — live context (agent TUI, tmux, dev servers) accumulates across days and project switches. Also required for the ports window and IDE attach. Refused while a live `shell` session of that flavor holds the store. The `-dsh` form prints the DSH URL plus the first-auth hint. |
-| `just attach <name>[-dsh] [vm]` | Your everyday entry once the flavor is `up`: bash inside the running sandbox. Exit the exec without stopping anything. |
-| `just logs <name>[-dsh] [-f] [vm]` | Print the running sandbox's startup/supervisor log — last 100 lines, then exit, exactly `docker logs`/`kubectl logs` semantics. The dsh launcher prints its URL/token here on every boot — including the first-auth `/deepseek?token=…` link. `-f`/`--follow` streams live instead; Ctrl+C then ends the follow quietly (the stream's designed exit, not a failure). Refused without an up'd container: a live `shell` session's log is the raw TUI escape stream, which floods the terminal ([FAQ](FAQ.md) → "docker logs"). |
-| `just clean <name>[-dsh] [vm]` | `compose down` for that flavor: containers + network + its expose relays; volumes kept. |
-| `just purge <name>[-dsh] [vm]` | Prompts y/N, then wipes THAT FLAVOR's volumes (dsh: including dsh-home). Source on the Mac untouched. Relays swept first. |
-| `just expose <name>[-dsh] [HOST[:CONTAINER]] [vm]` | Forward one sandbox port to macOS localhost, docker `-p` / `kubectl port-forward` order: LEFT = the port you open on the Mac, RIGHT = the port the app listens on inside; a single port maps the same number both sides. No spec = discovery: listeners + relay status. The relay targets the compose service name over the project's own network, so sandbox recreates are absorbed via DNS. |
-| `just unexpose <name>[-dsh] [HOST[:CONTAINER]] [vm]` | Release relays — three widening scopes: one claim (`unexpose test 3001`), that flavor's relays (`unexpose test`), every relay on the VM (`unexpose --all`, the "start clean" form — no prompt, relays carry no data). `unexpose --all my-box` passes the VM name in the second slot. |
-| `just dsh-url <name>` | Print the plain DSH macOS URL (`DSH_PORT` from `.sandbox.env`, default 3080). No `[vm]` — it only reads the project dir on the Mac. Deepseek-only by design; the first-auth token lives in the logs, not here. |
+| `just new <name>` | Scaffold `~/ai-projects/<name>` with a flavor-agnostic `.sandbox.env` — one file, safe on an existing repo checkout. `<name>`: starts with a letter or digit, lowercase letters/digits/`-`/`_`, never a reserved flavor suffix. Pin a known-good image tag with `IMAGE_TAG=YYYYMMDD` in the file. |
+| `just shell <name>[-dsh|-clean] [vm]` | One-off session: fresh container, **removed at exit** — fresh OS each run, volumes persist. For short, well-defined tasks in a CLOSED project. **Refused while ANY container of that flavor is running**: an up'd sandbox → use `attach`; a live/forgotten `shell` session → it holds the inner docker store, and the message names the container and how to remove it. |
+| `just up <name>[-dsh|-clean] [vm]` | Open the project for work: the sandbox runs in the background and **keeps running** — live context (agent TUI, tmux, dev servers) accumulates across days and project switches. Also required for the ports window and IDE attach. Refused while a live `shell` session of that flavor holds the store. The `-dsh` form prints the DSH URL plus the first-auth hint. |
+| `just attach <name>[-dsh|-clean] [vm]` | Your everyday entry once the flavor is `up`: bash inside the running sandbox. Exit the exec without stopping anything. |
+| `just logs <name>[-dsh|-clean] [vm] [-f]` | Print the running sandbox's startup/supervisor log — last 100 lines, then exit, like `docker logs`/`kubectl logs`. The dsh launcher prints its URL/token here on every boot — including the first-auth `/deepseek?token=…` link. `-f`/`--follow` streams live instead; Ctrl+C then ends the follow quietly (the stream's designed exit, not a failure). Refused without an up'd container: a live `shell` session's log is the raw TUI escape stream, which floods the terminal ([FAQ](FAQ.md) → "docker logs"). |
+| `just clean <name>[-dsh|-clean] [vm]` | `compose down` for that flavor: containers + network + its expose relays; volumes kept. |
+| `just purge <name>[-dsh|-clean] [vm]` | Prompts y/N, then wipes THAT FLAVOR's volumes (dsh: including dsh-home). Source on the Mac untouched. Relays swept first. |
+| `just expose <name>[-dsh|-clean] [HOST[:CONTAINER]] [vm]` | Forward one sandbox port to macOS localhost, docker `-p` / `kubectl port-forward` order: LEFT = the port you open on the Mac, RIGHT = the port the app listens on inside; a single port maps the same number both sides. No spec = discovery: listeners + relay status. The relay targets the compose service name over the project's own network, so sandbox recreates are absorbed via DNS. |
+| `just unexpose <name>[-dsh|-clean] [HOST[:CONTAINER]] [vm]` | Release relays — three widening scopes: one claim (`unexpose test 3001`), that flavor's relays (`unexpose test`), every relay on the VM (`unexpose --all`, the "start clean" form — no prompt, relays carry no data). `--all` takes the project-name slot, so the VM follows it: `unexpose --all my-box` (not `unexpose my-box --all`). |
+| `just dsh-url <name>[-dsh]` | Print the plain DSH macOS URL (`DSH_PORT` from `.sandbox.env`, default 3080). No `[vm]` — it only reads the project dir on the Mac. DSH-only by design; the first-auth token lives in the logs, not here. |
 | `just activate [vm]` | The unattended OpenCode Go keepalive — the idle-morning ritual as one command. Scaffolds the recipe-owned burner project `go-keepalive`, runs `scripts/go-keepalive.sh` in a one-off sandbox (`shell` semantics, TTY-less, cron/launchd-safe): one gateway-routed curl asking for a dad joke — a 200 reply opens/refreshes the plan's **5-hour rolling window**; anything else fails loudly with the [RUNBOOK](RUNBOOK.md) decode. Then: `purge` minus the y/N (`down -v` — the project is seconds old) and `rm -rf ~/ai-projects/go-keepalive`. No prompts, no residue; a run killed midway is healed by the next. Never use `go-keepalive` as a real project name. |
 
 DSH notes: each concurrently running DSH project needs its own `DSH_PORT`
-in its `.sandbox.env` (3080, 3081, 3082 …) and, when the ports window is
-on, its own `DSH_PORT_BASE` window. First boot flow: `just up <p>-dsh`,
+in its `.sandbox.env` (3080, 3081, 3082 …). The DSH UI port is always
+published; the dev-server window is opt-in with `SANDBOX_PORTS=1` and then
+needs its own `DSH_PORT_BASE` window. First boot flow: `just up <p>-dsh`,
 then `just logs <p>-dsh` for the `/deepseek?token=…` link — open it once
 in a macOS browser and you're authenticated.
 
@@ -104,9 +105,10 @@ Each VM keeps its own images, mirror and inner volumes, but both mount
 the same `~/ai-projects` source on the Mac, so a project can run in
 either (or both) with independent inner state. Two caveats: ports —
 every VM forwards its loopback to the same macOS `127.0.0.1`, so DSH
-projects running in parallel VMs need distinct `DSH_PORT`s — and RAM:
-one VM is the intended shape; N VMs fragment memory and duplicate
-caches ([ARCHITECTURE.md](ARCHITECTURE.md) → "Why this shape"). For a
+projects running in parallel VMs need distinct `DSH_PORT`s (and distinct
+window ranges when `SANDBOX_PORTS=1`) — and RAM: one VM is the intended
+shape; N VMs fragment memory and duplicate caches
+([ARCHITECTURE.md](ARCHITECTURE.md) → "Why this shape"). For a
 name you use permanently, put `VM_NAME=my-box` in the repo-root
 `.just.env` (auto-loaded, gitignored; template: `.just.env.example`) —
 no trailing argument, no export.
@@ -125,14 +127,14 @@ no trailing argument, no export.
   deliberate one-off** (`compose run --rm`): fresh container, removed
   at exit — right for a short, well-defined task in a CLOSED project;
   past conversations still resume from the volume (see below), so even
-  one-offs start warm. ⚠ Never `shell` into a flavor that's
-  already `up` — even for a one-second look-inside: the one-off container mounts
-  the same `inner-docker-data` volume, and two inner
-  daemons on one docker store corrupt it. The `shell` recipe refuses and
-  points at `attach` — and it also refuses when a live/forgotten
-  `shell` session is still holding the store (same corruption, name the
-  container to remove). Raw docker won't stop you, so don't bypass the
-  guard. A DIFFERENT flavor is fine: its store is disjoint.
+  one-offs start warm. ⚠ Never `shell` into a flavor that's already
+  `up` — even for a one-second look-inside: the one-off container mounts
+  the same `inner-docker-data` volume, and two inner daemons on one
+  docker store corrupt it. The `shell` recipe refuses and points at
+  `attach` — and it also refuses when a live/forgotten `shell` session
+  is still holding the store (same corruption, name the container to
+  remove). Raw docker won't stop you, so don't bypass the guard. A
+  DIFFERENT flavor is fine: its store is disjoint.
 
   Either way the volumes persist: source, build caches, inner docker
   images, OpenCode config/auth — and OpenCode's session history
@@ -148,10 +150,10 @@ no trailing argument, no export.
   cheap dad-joke ping on an idle morning — no typing, no residue.
 - **`clean` vs `purge` vs `vm-rebuild`/`nuke`** — the ephemerality
   ladder ([ARCHITECTURE.md](ARCHITECTURE.md) → "Ephemerality ladder"):
-  `clean` drops the container OS, `purge` also drops that project's
-  volumes, `vm-rebuild`/`nuke` drop the whole VM — every project's
+  `clean` drops the container OS, `purge` also drops that flavor's
+  volumes, `vm-rebuild`/`nuke` drop the whole VM — every flavor's
   volumes with it. Suffix-scoped: `clean proj-dsh` touches only the dsh
-  sandbox of that dir.
+  sandbox of that dir; `clean proj-clean` only the whiteboard one.
 - **ports window vs `just expose`** — the two ways to reach a sandbox
   port from the Mac, mirroring compose `ports:` vs `kubectl
   port-forward`: a **declared window** in `.sandbox.env`

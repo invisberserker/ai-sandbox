@@ -15,18 +15,18 @@ This stack deliberately runs **one daemon per sandbox** (the sysbox
 isolation: private docker, private store, safe `docker compose up`).
 Concurrent daemons cannot share one image store without corrupting each
 other, so each inner daemon gets its own `/var/lib/docker` on a
-per-project volume — and the same public image is downloaded and stored
-once per project that uses it. The outer side never duplicates:
-ai-opencode/ai-deepseek images are built once and shared copy-on-write by
-all sandboxes; only inner-daemon pulls (test services) repeat.
+per-flavor volume — and the same public image is downloaded and stored
+once per project-flavor that uses it. The outer side never duplicates:
+the flavor images are built once and shared copy-on-write by all
+sandboxes; only inner-daemon pulls (test services) repeat.
 
 The pull-through mirror deduplicates the **network**, not the disk:
 every daemon pulls through the VM's registry-mirror cache (the
 `REGISTRY_IMAGE` pin in `vm/ai-box.yaml`; outer via `daemon.json`, inner
 via the entrypoint's `--registry-mirror`), so an image is fetched from
 Docker Hub once and served at disk speed to every other project. Disk
-duplication per project remains by design — `just purge <dead-project>`
-reclaims it.
+duplication per project-flavor remains by design — `just purge
+<dead-project>[-dsh|-clean]` reclaims it.
 
 Deep dive: [ARCHITECTURE.md](ARCHITECTURE.md) §"Registry mirror".
 
@@ -113,9 +113,9 @@ split:
 - **Declarative window** (compose `ports:` style): `SANDBOX_PORTS=1` +
   `PORT_BASE`/`PORT_BASE_END` in the project's `.sandbox.env`, covering
   your app's contiguous dev ports. Identity mapping — sandbox port N
-  appears on Mac localhost:N — published on every `just up`. The `-dsh`
-  flavor gets its own window (`DSH_PORT_BASE`), so both flavors of one
-  dir coexist.
+  appears on Mac localhost:N — published on every `just up`. With the same
+  switch on, the `-dsh` flavor gets its own window (`DSH_PORT_BASE`), so
+  both flavors of one dir coexist.
 - **Imperative relay** (`kubectl port-forward` style): `just expose
   <name> [HOST:CONTAINER]` — one port, any port, works on live `shell`
   sessions too; natural claim on the same number, loud conflict

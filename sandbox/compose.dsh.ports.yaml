@@ -1,0 +1,16 @@
+# =============================================================================
+# DSH dev-server window — opt-in, merged AFTER compose.dsh.yaml
+# =============================================================================
+# The Justfile includes this file only when the project's .sandbox.env sets
+# SANDBOX_PORTS=1. DSH UI publishing is always on (compose.dsh.yaml); this
+# file adds the dev-server range and REPLACES the UI-only ports list, so the
+# opencode window never leaks into a dsh sandbox.
+#
+# IDENTITY mapping: sandbox port N appears on macOS localhost:N. Give every
+# concurrently running DSH project its own DSH_PORT_BASE/DSH_PORT_BASE_END.
+# =============================================================================
+services:
+  agent:
+    ports: !override
+      - "127.0.0.1:${DSH_PORT:-3080}:3080"
+      - "127.0.0.1:${DSH_PORT_BASE:-3200}-${DSH_PORT_BASE_END:-3399}:${DSH_PORT_BASE:-3200}-${DSH_PORT_BASE_END:-3399}"

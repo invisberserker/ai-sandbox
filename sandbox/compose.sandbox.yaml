@@ -14,13 +14,13 @@
 # Knobs live in <project>/.sandbox.env (see sandbox/sandbox.env.example;
 # `just new` writes one). Passed via --env-file, so a repo's own `.env`
 # — the standard dotenv file your app reads — is never consulted by the
-# sandbox tooling. Named volumes are namespaced by the project name, so
-# this SAME file serves every project unchanged — and every FLAVOR: the
-# Justfile passes --project-name <dir>[-dsh], so the opencode and dsh
-# sandboxes of one dir coexist as separate compose projects (disjoint
-# containers/volumes/networks) over the same /workspace bind. The flavor
-# suffix also selects the image (via the SANDBOX_IMAGE env the Justfile
-# exports; OS env beats --env-file).
+# sandbox tooling. Named volumes are namespaced by the compose project
+# name, so this SAME file serves every project unchanged — and every
+# FLAVOR: the Justfile passes --project-name <dir>[-dsh|-clean], so the
+# opencode, dsh and clean sandboxes of one dir coexist as separate compose
+# projects (disjoint containers/volumes/networks) over the same /workspace
+# bind. The suffix selects the flavor image via the SANDBOX_IMAGE env the
+# Justfile exports (OS env beats --env-file).
 #
 # ISOLATION MODEL (docs/SECURITY.md): runtime sysbox-runc makes this a
 # "system container" — the agent is root INSIDE (apt install works, /etc is
@@ -35,7 +35,7 @@ services:
     # sysbox = rootless user-ns + virtualized /proc,/sys + auto-provisioned
     # backing store for the inner /var/lib/docker. If sysbox breaks after a
     # kernel incident, use the FALLBACK profile at the bottom — but read
-    # docs/RUNBOOK.md §sysbox first: the fallback trades away per-project
+    # docs/RUNBOOK.md §sysbox first: the fallback trades away per-flavor
     # docker isolation and port collision-freedom.
     runtime: sysbox-runc
 
@@ -132,12 +132,12 @@ services:
         target: /workspace
       # Private inner docker state — survives OS-level sandbox resets (tier 1
       # in the ephemerality ladder below), so images the agent pulled
-      # (postgres, redis, ...) stay cached for the project. ONE daemon at
-      # a time: `just shell <p>` while the project is `up` puts a second
-      # inner dockerd on this store and corrupts it — use `just attach`
-      # (the Justfile's shell guard refuses the mistake; the rule applies
-      # per flavor AND to two concurrent `shell` sessions of one flavor —
-      # the guard names the container holding the store).
+      # (postgres, redis, ...) stay cached for the flavor. ONE daemon at
+      # a time: `just shell <p>` while the project is `up` WOULD put a
+      # second inner dockerd on this store and corrupt it — use `just
+      # attach` (the Justfile's shell guard refuses the mistake; the rule
+      # applies per flavor AND to two concurrent `shell` sessions of one
+      # flavor — the guard names the container holding the store).
       - type: volume
         source: inner-docker-data
         target: /var/lib/docker
@@ -164,12 +164,11 @@ services:
         source: vscode-server
         target: /root/.vscode-server
 
-    # ---- Expose sandbox ports to macOS: MOVED ----------------------------------
-    # The per-project dev-server window lives in compose.ports.yaml, which
-    # the Justfile merges only when .sandbox.env sets SANDBOX_PORTS=1 (+
-    # a PORT_BASE window). Identity mapping: sandbox port N appears on
-    # macOS localhost:N; `just up` only. One-off ports anytime:
-    #   just expose <name> <port>
+    # ---- Sandbox ports → macOS: see compose.ports.yaml / `just expose` --------
+    # The per-flavor dev-server window lives in compose.ports.yaml, merged
+    # only when .sandbox.env sets SANDBOX_PORTS=1 (+ a PORT_BASE window).
+    # Identity mapping: sandbox port N appears on macOS localhost:N; `just
+    # up` only. One-off ports anytime: `just expose <name> <port>`.
     # Details: docs/RUNBOOK.md → "Two network layers", docs/COMMANDS.md.
 
     # ---- OPTIONAL: git push auth via the Mac's ssh-agent ----------------------
@@ -197,12 +196,11 @@ volumes:
 
 # =============================================================================
 # EPHEMERALITY LADDER (three reset tiers)
-#   1. just shell <p>[-dsh]      — fresh container OS every run: global
+#   1. just shell <p>[-dsh|-clean] — fresh container OS every run: global
 #      packages, /etc edits, rogue cronjobs all vanish; source, caches,
 #      inner images, OpenCode config and dsh state persist on volumes.
-#   2. just purge <p>[-dsh]      — also wipes that flavor's volumes (inner
-#      images, build caches, agent state; the -dsh form includes
-#      dsh-home).
+#   2. just purge <p>[-dsh|-clean] — also wipes that flavor's volumes (inner
+#      images, build caches, agent state; the -dsh form includes dsh-home).
 #   3. just nuke                 — deletes the entire VM. Survivors: source and
 #      secrets (~/.ai-secrets) on the Mac. Volumes die with the VM.
 # =============================================================================
@@ -211,10 +209,11 @@ volumes:
 # DSH (DeepSeek Harness) OVERRIDE
 #   The dsh flavor runs the DSH web UI inside this sandbox. Use
 #   `just up <project>-dsh`; the Justfile merges sandbox/compose.dsh.yaml
-#   LAST, which publishes 127.0.0.1:${DSH_PORT}:3080 (plus the dsh flavor's
-#   own dev-server window via `ports: !override`) and mounts the dsh-home
-#   volume. Open http://localhost:${DSH_PORT} on macOS. Other flavors use
-#   the plain project name (`just up <project>` / `just shell <project>`).
+#   after the base/ports files, publishing 127.0.0.1:${DSH_PORT}:3080 and
+#   mounting the dsh-home volume. With SANDBOX_PORTS=1 it also merges
+#   compose.dsh.ports.yaml for the dsh dev window (`ports: !override`).
+#   Open http://localhost:${DSH_PORT} on macOS. Other flavors use the plain
+#   name or -clean (`just up <project>` / `just up <project>-clean`).
 # =============================================================================
 #
 # =============================================================================
@@ -225,7 +224,7 @@ volumes:
 # stale-socket cleanup that would try to rm the bind-mounted outer socket
 # (EBUSY under set -e = instant container death, so don't mount the socket
 # without it). `docker` inside the sandbox then talks to the VM's GLOBAL
-# daemon. You lose: per-project docker isolation (one agent's `docker
+# daemon. You lose: per-flavor docker isolation (one agent's `docker
 # system prune -a` hits every project) and localhost port collision-freedom
 # between projects. Fix sysbox (docs/RUNBOOK.md) and restore this file; the
 # fallback is a crutch, not a mode.

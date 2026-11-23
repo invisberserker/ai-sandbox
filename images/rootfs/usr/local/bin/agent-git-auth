@@ -12,7 +12,7 @@
 # Called automatically from /etc/profile.d/ai-sandbox.sh whenever
 # GIT_SSH_KEY_B64 is set (idempotent, near-zero cost); headless scripts
 # call it explicitly once. It materializes:
-#   ~/.ssh/<GIT_SSH_HOST>.key     the private key (0600, re-derived per
+#   ~/.ssh/agent_ed25519          the private key (0600, re-derived per
 #                                 container — never on a volume, gone
 #                                 after `just clean`)
 #   ~/.ssh/config                 Host block pinning the identity

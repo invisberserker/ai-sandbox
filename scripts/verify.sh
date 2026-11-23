@@ -9,7 +9,7 @@
 #   sandbox   : ONE full sysbox boot — inner dockerd up, PRIVATE (docker ps
 #               empty), user namespace really in effect, OpenCode functional
 #   conc      : two flavors of ONE dir at once (suffix model) — disjoint
-#               volumes, the dsh !override window swap, OS-env image
+#               volumes, opt-in dsh window via !override, OS-env image
 #               precedence, one expose relay
 #
 # Deliberately NOT set -e: we want the full report, not first-fail abort.
@@ -145,7 +145,8 @@ if image_exists ai-opencode:latest; then
     node --version >/dev/null && rustc --version >/dev/null && opencode --version >/dev/null
     # the uv-managed cpython is really there, and bare python3 points at it
     uv python find >/dev/null && python3 --version >/dev/null
-    # inner daemon can actually run a container through the mirror
+    # inner daemon can start a container (best effort: the pull needs
+    # network/mirror; mirror health is asserted in the VM section)
     docker run --rm hello-world >/dev/null 2>&1 || true
   ' 2>&1)"
   RC=$?
@@ -161,10 +162,10 @@ fi
 
 echo "== two flavors, one dir, concurrently (the suffix model) =="
 # Boots the same project dir as BOTH flavors at once: separate compose
-# projects (bare name vs -dsh), disjoint volumes/networks, the ports
-# window merged for both with the dsh override REPLACING the opencode
-# one (!override), OS-env SANDBOX_IMAGE beating --env-file, one ad-hoc
-# expose relay answering on the VM loopback, and the designed loud
+# projects (bare name vs -dsh), disjoint volumes/networks, the opt-in
+# ports window merged for both with the dsh override REPLACING the
+# opencode one (!override), OS-env SANDBOX_IMAGE beating --env-file, one
+# ad-hoc expose relay answering on the VM loopback, and the designed loud
 # refusal of an in-window relay claim. This mirrors what the Justfile's
 # compose wrapper builds for `just up <p>` + `up <p>-dsh`.
 SMOKE="smoke-conc-$$"
@@ -174,7 +175,7 @@ if ! image_exists ai-opencode:latest || ! image_exists ai-deepseek:latest; then
   bad "concurrency smoke skipped — build both flavors first (just build)"
 else
   mkdir -p "$SMOKE_DIR"
-  # The stale SANDBOX_IMAGE line is deliberate: proves OS env wins.
+  # The conflicting SANDBOX_IMAGE line is deliberate: proves OS env wins.
   # DSH_PORT=3099 is deliberately NOT the 3080 default: a REAL dsh project
   # may be up on the VM (e.g. the user's own) — the smoke must never claim
   # its port. Same idea as the windows below (3530s / 3540s).
@@ -194,7 +195,7 @@ else
 
   SANDBOX_IMAGE=ai-deepseek:latest docker compose --env-file "$SMOKE_DIR/.sandbox.env" \
     -f "$REPO_DIR/sandbox/compose.sandbox.yaml" -f "$REPO_DIR/sandbox/compose.ports.yaml" \
-    -f "$REPO_DIR/sandbox/compose.dsh.yaml" \
+    -f "$REPO_DIR/sandbox/compose.dsh.yaml" -f "$REPO_DIR/sandbox/compose.dsh.ports.yaml" \
     --project-directory "$SMOKE_DIR" --project-name "$SMOKE-dsh" up -d >/dev/null 2>&1 \
     && ok "conc: dsh sandbox boots alongside (project $SMOKE-dsh)" \
     || bad "conc: dsh sandbox boots alongside (project $SMOKE-dsh)"
@@ -216,13 +217,25 @@ else
 
   CFG="$(SANDBOX_IMAGE=ai-deepseek:latest docker compose --env-file "$SMOKE_DIR/.sandbox.env" \
     -f "$REPO_DIR/sandbox/compose.sandbox.yaml" -f "$REPO_DIR/sandbox/compose.ports.yaml" \
-    -f "$REPO_DIR/sandbox/compose.dsh.yaml" \
-    --project-directory "$SMOKE_DIR" --project-name "$SMOKE" config 2>/dev/null || true)"
+    -f "$REPO_DIR/sandbox/compose.dsh.yaml" -f "$REPO_DIR/sandbox/compose.dsh.ports.yaml" \
+    --project-directory "$SMOKE_DIR" --project-name "$SMOKE-dsh" config 2>/dev/null || true)"
   if printf '%s' "$CFG" | grep -q "3540" && printf '%s' "$CFG" | grep -q "3549" \
      && ! printf '%s' "$CFG" | grep -q "3530"; then
     ok "conc: dsh !override replaces the opencode window (compose >= 2.24)"
   else
     bad "conc: dsh !override replaces the opencode window (compose >= 2.24 required?)"
+  fi
+  # Same env, but without the opt-in dsh ports file: UI only, no dev window.
+  CFG_NOPORTS="$(SANDBOX_IMAGE=ai-deepseek:latest docker compose --env-file "$SMOKE_DIR/.sandbox.env" \
+    -f "$REPO_DIR/sandbox/compose.sandbox.yaml" \
+    -f "$REPO_DIR/sandbox/compose.dsh.yaml" \
+    --project-directory "$SMOKE_DIR" --project-name "$SMOKE-dsh" config 2>/dev/null || true)"
+  if printf '%s' "$CFG_NOPORTS" | grep -q "3080" \
+     && ! printf '%s' "$CFG_NOPORTS" | grep -q "3540" \
+     && ! printf '%s' "$CFG_NOPORTS" | grep -q "3530"; then
+    ok "conc: dsh dev window is opt-in (compose.dsh.ports.yaml only)"
+  else
+    bad "conc: dsh dev window leaked without SANDBOX_PORTS"
   fi
   if printf '%s' "$CFG" | grep -q "image: ai-deepseek"; then
     ok "conc: OS env SANDBOX_IMAGE beats the --env-file value"
@@ -261,6 +274,7 @@ else
     if docker run -d --rm --name "${SMOKE}-expose-conflict" \
          --network "${SMOKE}_default" \
          -p 127.0.0.1:3531:3531 \
+         --label ai-sandbox.relay="$SMOKE" --label ai-sandbox.target=agent:3531 \
          alpine/socat tcp-listen:3531,fork,reuseaddr tcp:agent:3531 >/dev/null 2>&1; then
       docker rm -f "${SMOKE}-expose-conflict" >/dev/null 2>&1 || true
       bad "conc: in-window relay claim NOT refused (3531 sits inside the 3530-3539 window)"
@@ -292,13 +306,12 @@ else
   # killed run might have left), then both projects down -v
   relay_ids="$(docker ps -aq --filter label=ai-sandbox.relay="$SMOKE" 2>/dev/null)"
   [ -n "$relay_ids" ] && docker rm -f $relay_ids >/dev/null 2>&1 || true
-  docker rm -f "${SMOKE}-expose-3531" >/dev/null 2>&1 || true
   SANDBOX_IMAGE=ai-opencode:latest docker compose --env-file "$SMOKE_DIR/.sandbox.env" \
     -f "$REPO_DIR/sandbox/compose.sandbox.yaml" -f "$REPO_DIR/sandbox/compose.ports.yaml" \
     --project-directory "$SMOKE_DIR" --project-name "$SMOKE" down -v >/dev/null 2>&1 || true
   SANDBOX_IMAGE=ai-deepseek:latest docker compose --env-file "$SMOKE_DIR/.sandbox.env" \
     -f "$REPO_DIR/sandbox/compose.sandbox.yaml" -f "$REPO_DIR/sandbox/compose.ports.yaml" \
-    -f "$REPO_DIR/sandbox/compose.dsh.yaml" \
+    -f "$REPO_DIR/sandbox/compose.dsh.yaml" -f "$REPO_DIR/sandbox/compose.dsh.ports.yaml" \
     --project-directory "$SMOKE_DIR" --project-name "$SMOKE-dsh" down -v >/dev/null 2>&1 || true
   rm -rf "$SMOKE_DIR"
   if ! docker ps -aq --filter name="^${SMOKE}" | grep -q . && ! docker volume ls -q | grep -q "^${SMOKE}"; then
