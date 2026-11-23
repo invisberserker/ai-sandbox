@@ -605,8 +605,13 @@ expose name spec="" vm=vm_name:
     limactl shell "$vm" -- bash -lc '
       set -e
       spec="$1"
+      # docker -p order: HOST (the Mac-side number) then CONTAINER (the
+      # sandbox-side port). The operators differ on purpose: ## strips the
+      # shortest PREFIX matching "*:"; %% strips the longest SUFFIX
+      # matching ":*". Swapping them breaks remaps silently (a *: suffix
+      # never ends a host:port string).
       target="${spec##*:}"
-      host="${spec%%*:}"
+      host="${spec%%:*}"
       cid="$(docker ps -q --filter label=com.docker.compose.project={{name}} | head -1)"
       if [ -z "$cid" ]; then
         echo "no running sandbox {{name}} to relay from (try: just up {{name}} or a live just shell)" >&2
@@ -618,12 +623,13 @@ expose name spec="" vm=vm_name:
            -p 127.0.0.1:$host:$host \
            --label ai-sandbox.relay={{name}} \
            --label ai-sandbox.target=agent:$target \
-           alpine/socat tcp-listen:$host,fork,reuseaddr tcp:agent:$target; then
+           alpine/socat tcp-listen:$host,fork,reuseaddr tcp:agent:$target >/dev/null; then
         echo "could not claim VM port $host (a window or another relay holds it?)" >&2
+        echo "note: the VM gateway :4000 and mirror :5000 are reserved — cannot be exposed" >&2
         echo "try another Mac-side number:  just expose {{name}} ALT:$target" >&2
         exit 1
       fi
-      echo "exposed: Mac localhost:$host → {{name}} :$target"
+      echo "exposed: Mac localhost:$host → {{name}}:$target"
     ' _ "$spec"
 
 # `just unexpose --all [VM]` takes the VM in the optional slot.

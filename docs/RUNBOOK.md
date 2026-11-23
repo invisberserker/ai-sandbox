@@ -28,7 +28,9 @@ Read this before debugging any port.
     the project's own network, targeting the compose service name (a
     sandbox recreate is absorbed via DNS). `just expose <name>` (no
     spec) lists what the sandbox is listening on; `just unexpose`
-    releases relays (`--all` = every relay on the VM).
+    releases relays (`--all` = every relay on the VM). The VM's own
+    listeners (gateway `:4000`, mirror `:5000`) are reserved — claiming
+    them fails loudly.
 - Rule of thumb when a port doesn't appear on the Mac: figure out which of
   the two boxes it bound in. `limactl shell ai-box` + `ss -ltn` inside the
   VM shows layer 2; relays show up as containers named
